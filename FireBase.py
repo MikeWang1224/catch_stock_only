@@ -313,52 +313,44 @@ def predict_future_ma(model, scaler_x, scaler_y, X_scaled, df):
 
 # ============================ 📈 畫圖（每日刻度 + 從今天開始） ============================
 def plot_all(df_real, df_future):
-
+    # 將 index 當作日期
     df_real['date'] = pd.to_datetime(df_real.index)
     df_future['date'] = pd.to_datetime(df_future['date'])
 
-    # 只顯示「今天之後」的資料
-    today = datetime.now().date()
-    df_real = df_real[df_real['date'].dt.date >= today]
+    # 取最後一天歷史資料的前一天
+    last_hist_idx = df_real.index.get_loc(df_real.index[-1])
+    start_idx = max(0, last_hist_idx - 1)  # 確保不越界
+    df_plot_real = df_real.iloc[start_idx:]
 
-    # 合併
-    df_all = pd.concat([
-        df_real[['date','Close','SMA_5','SMA_10']], 
-        df_future.set_index('date')
-    ], axis=0)
+    plt.figure(figsize=(12,6))
 
-    plt.figure(figsize=(12, 6))
+    # 畫前一天的實線：Close / SMA5 / SMA10
+    plt.plot(df_plot_real['date'], df_plot_real['Close'], label="Close", color="blue", linestyle='-')
+    plt.plot(df_plot_real['date'], df_plot_real['SMA_5'], label="SMA5", color="green", linestyle='-')
+    plt.plot(df_plot_real['date'], df_plot_real['SMA_10'], label="SMA10", color="orange", linestyle='-')
 
-    # 歷史資料
-    if not df_real.empty:
-        plt.plot(df_real['date'], df_real['Close'], label="Close", color="blue")
-        plt.plot(df_real['date'], df_real['SMA_5'], label="SMA5", color="green")
-        plt.plot(df_real['date'], df_real['SMA_10'], label="SMA10", color="orange")
-
-    # 預測 MA5 / MA10
+    # 畫預測 MA5 / MA10，虛線
     plt.plot(df_future['date'], df_future['Pred_MA5'], '--', label="Pred MA5", color="lime")
     plt.plot(df_future['date'], df_future['Pred_MA10'], '--', label="Pred MA10", color="red")
 
-    # === 每日刻度 ===
-    ax = plt.gca()
-    ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m-%d'))
-
+    # X 軸以日為單位
+    plt.gca().xaxis.set_major_locator(plt.MultipleLocator(1))
     plt.gcf().autofmt_xdate(rotation=45)
 
-    plt.title("2301.TW — 預測 SMA5 / SMA10（每日刻度，從今天開始）")
+    plt.legend()
+    plt.title("2301.TW 預測 5/10 日線（每日刻度）")
     plt.xlabel("Date")
     plt.ylabel("Price")
-    plt.legend()
 
     results_dir = "results"
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
+    today = datetime.now().strftime("%Y-%m-%d")
     file_path = f"{results_dir}/{today}.png"
     plt.savefig(file_path, dpi=300, bbox_inches='tight')
     plt.close()
-
     print(f"📌 圖片已儲存：{file_path}")
+
 
 
 # ============================ ▶️ 主流程 ============================
