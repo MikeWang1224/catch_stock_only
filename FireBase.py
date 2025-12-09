@@ -182,7 +182,7 @@ def plot_all(df_real, df_future, hist_days=60):
 
     plt.figure(figsize=(16,8))
 
-    # 歷史線（連續索引）
+    # 用交易日索引作 X
     x_real = range(len(df_real))
     plt.plot(x_real, df_real['Close'], label="Close")
     if 'SMA_5' in df_real.columns:
@@ -209,11 +209,9 @@ def plot_all(df_real, df_future, hist_days=60):
     plt.plot(x_future, df_future_plot['Pred_MA5'], '--', label="Pred MA5")
     plt.plot(x_future, df_future_plot['Pred_MA10'], '--', label="Pred MA10")
 
-    # X 軸刻度只顯示交易日日期
+    # X 軸刻度：每天一個刻度，非交易日自動跳過
     all_dates = list(df_real.index) + list(df_future['date'])
-    tick_pos = range(0, len(all_dates), max(1, len(all_dates)//10))
-    tick_labels = [pd.Timestamp(d).strftime('%m-%d') for i,d in enumerate(all_dates) if i in tick_pos]
-    plt.xticks([i for i in tick_pos], tick_labels, rotation=45)
+    plt.xticks(range(len(all_dates)), [pd.Timestamp(d).strftime('%m-%d') for d in all_dates], rotation=45)
 
     plt.legend()
     plt.title("2301.TW 歷史 + 預測（交易日連續）")
@@ -225,6 +223,7 @@ def plot_all(df_real, df_future, hist_days=60):
     plt.savefig(file_path, dpi=300, bbox_inches='tight')
     plt.close()
     print("📌 圖片已儲存：", file_path)
+
 
 
 
