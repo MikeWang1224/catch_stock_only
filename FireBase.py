@@ -41,6 +41,10 @@ def fetch_and_calculate():
     stock = yf.Ticker(ticker_symbol)
     df = stock.history(period="6mo")
 
+    # 將 index 轉為 date 欄位
+    df.reset_index(inplace=True)
+    df.rename(columns={'Date':'date'}, inplace=True)
+
     # 技術指標計算
     df['SMA_5'] = df['Close'].rolling(window=5).mean().round(5)
     df['SMA_10'] = df['Close'].rolling(window=10).mean().round(5)
@@ -75,7 +79,7 @@ def save_to_firestore(df):
     count = 0
 
     for idx, row in df.iterrows():
-        date_str = idx.strftime("%Y-%m-%d")
+        date_str = row['date'].strftime("%Y-%m-%d")
         data = {col: float(row[col]) for col in selected if not pd.isna(row[col])}
         doc_ref = db.collection(collection).document(date_str)
         batch.set(doc_ref, {"2301.TW": data})
@@ -87,6 +91,21 @@ def save_to_firestore(df):
 
     batch.commit()
     print("🔥 Firestore 寫入完成")
+
+
+# ============================ 📥 Firestore 讀取 ============================
+def read_from_firestore():
+    docs = db.collection("NEW_stock_data_liteon").stream()
+
+    rows = []
+    for doc in docs:
+        data = doc.to_dict().get("2301.TW", {})
+        data["date"] = pd.to_datetime(doc.id)
+        rows.append(data)
+
+    df = pd.DataFrame(rows).sort_values("date")
+    df.reset_index(drop=True, inplace=True)
+    return df
 
 
 # ============================ 🤖 建 LSTM 模型 ============================
@@ -133,15 +152,17 @@ def predict_future_ma(model, scaler_x, scaler_y, X_scaled, df):
         pred = model.predict(last_30.reshape(1, 30, X_scaled.shape[1]))
         future.append(pred[0])
 
-        # 更新 last_30，用預測 Close 替代
+        # 更新 last_30
         new_row = np.zeros((1, X_scaled.shape[1]))
-        new_row[0, 0] = pred[0][0]  # MA5 預測替代 Close
+        new_row[0, 0] = pred[0][0]  # 使用 Pred MA5 替代 Close
         last_30 = np.append(last_30[1:], new_row, axis=0)
 
     future_array = np.array(future)
     future_ma = scaler_y.inverse_transform(future_array)
 
-    dates = pd.date_range(df['date'].iloc[-1] + timedelta(days=1), periods=10)
+    last_day = df['date'].iloc[-1]
+    dates = pd.date_range(last_day + timedelta(days=1), periods=10)
+
     df_future = pd.DataFrame({
         "date": dates,
         "Pred_MA5": future_ma[:, 0],
@@ -187,8 +208,8 @@ if __name__ == "__main__":
     df = fetch_and_calculate()
     save_to_firestore(df)
 
-    # 🔥 直接用抓回的 df 訓練 LSTM
-    model, scaler_x, scaler_y, X_scaled = train_lstm(df)
+    df_train = read_from_firestore()
+    model, scaler_x, scaler_y, X_scaled = train_lstm(df_train)
 
-    df_future = predict_future_ma(model, scaler_x, scaler_y, X_scaled, df)
-    plot_all(df, df_future)
+    df_future = predict_future_ma(model, scaler_x, scaler_y, X_scaled, df_train)
+    plot_all(df_train, df_future)
