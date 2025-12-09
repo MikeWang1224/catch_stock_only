@@ -139,11 +139,11 @@ def predict_future(model, scaler, scaled, df):
         future.append(pred[0][0])
         last_30 = np.append(last_30[1:], pred, axis=0)
 
-    # 逆縮放
-    future_prices = scaler.inverse_transform(
-        np.hstack((np.array(future).reshape(-1, 1),
-                   np.zeros((10, scaled.shape[1]-1))))
-    )[:,0]
+    future_array = np.array(future).reshape(-1, 1)
+    zeros_array = np.zeros((future_array.shape[0], scaled.shape[1]-1))
+    stacked = np.hstack((future_array, zeros_array))
+
+    future_prices = scaler.inverse_transform(stacked)[:,0]
 
     df_future = pd.DataFrame({
         "date": pd.date_range(df['date'].iloc[-1], periods=11, closed="right"),
@@ -151,6 +151,7 @@ def predict_future(model, scaler, scaled, df):
     })
 
     return df_future
+
 
 
 # ============================ 📈 畫圖 ============================
