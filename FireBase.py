@@ -17,7 +17,7 @@ from firebase_admin import credentials, firestore
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import MinMaxScaler
 from tensorflow.keras.models import Sequential
@@ -49,7 +49,7 @@ def fetch_and_calculate():
     delta = df['Close'].diff()
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
-    df['RSI'] = (100 - (100 / (1 + (gain.rolling(20).mean() / loss.rolling(20).mean())))).round(5)
+    df['RSI'] = (100 - (100 / (1 + (gain.rolling(20).mean() / loss.rolling(20).mean()))))).round(5)
 
     df['Lowest_14'] = df['Low'].rolling(window=14).min()
     df['Highest_14'] = df['High'].rolling(window=14).max()
@@ -70,9 +70,11 @@ def save_to_firestore(df):
 
     batch = db.batch()
     count = 0
+
     for idx, row in df.iterrows():
         date_str = idx.strftime("%Y-%m-%d")
         data = {col: float(row[col]) for col in selected if not pd.isna(row[col])}
+
         doc_ref = db.collection(collection).document(date_str)
         batch.set(doc_ref, {"2301.TW": data})
         count += 1
@@ -103,11 +105,13 @@ def read_from_firestore():
 # ============================ 🤖 建 LSTM 模型 ============================
 def train_lstm(df):
     features = ['Close', 'Volume', 'MACD', 'RSI', 'K', 'D']
+
     scaler = MinMaxScaler()
     scaled = scaler.fit_transform(df[features])
 
     X, y = [], []
     window = 30
+
     for i in range(window, len(scaled)):
         X.append(scaled[i-window:i])
         y.append(scaled[i][0])
@@ -124,74 +128,76 @@ def train_lstm(df):
 
     model.compile(optimizer='adam', loss='mse')
     model.fit(X, y, epochs=30, batch_size=32, verbose=1)
-    print("🎉 LSTM 訓練完成")
 
+    print("🎉 LSTM 訓練完成")
     return model, scaler, scaled
 
 
 # ============================ 🔮 預測未來 10 天 ============================
 def predict_future(model, scaler, scaled, df):
-    last_30 = scaled[-30:]
+    last_30 = scaled[-30:]     # shape (30, 6)
     future = []
 
     for _ in range(10):
         pred = model.predict(last_30.reshape(1, 30, scaled.shape[1]))
         future.append(pred[0][0])
-        last_30 = np.append(last_30[1:], pred, axis=0)
+
+        # 🔥 修正：把 pred 擴展成 shape (1, 6)
+        pred_full = np.zeros((1, scaled.shape[1]))
+        pred_full[0, 0] = pred[0][0]  # Close 位置
+
+        # 🔥 正確拼接
+        last_30 = np.append(last_30[1:], pred_full, axis=0)
 
     future_array = np.array(future).reshape(-1, 1)
-    zeros_array = np.zeros((future_array.shape[0], scaled.shape[1]-1))
+    zeros_array = np.zeros((future_array.shape[0], scaled.shape[1] - 1))
     stacked = np.hstack((future_array, zeros_array))
 
-    future_prices = scaler.inverse_transform(stacked)[:,0]
+    future_prices = scaler.inverse_transform(stacked)[:, 0]
+
+    # 避免 pandas "closed" 參數警告（新版已移除）
+    dates = pd.date_range(df['date'].iloc[-1], periods=11)[1:]
 
     df_future = pd.DataFrame({
-        "date": pd.date_range(df['date'].iloc[-1], periods=11, closed="right"),
+        "date": dates,
         "Close": future_prices
     })
 
     return df_future
 
 
-
 # ============================ 📈 畫圖 ============================
-# ============================ 📈 畫圖 + 儲存 ============================
 def plot_all(df_real, df_future):
-    df_all = pd.concat([df_real[['date','Close']], df_future])
+    df_all = pd.concat([df_real[['date', 'Close']], df_future])
     df_all['SMA_5'] = df_all['Close'].rolling(5).mean()
     df_all['SMA_10'] = df_all['Close'].rolling(10).mean()
 
-    # 建立結果資料夾（若不存在）
     results_dir = "results"
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
 
-    # 產生檔案名稱（以今日日期命名）
     today = datetime.now().strftime("%Y-%m-%d")
     file_path = f"{results_dir}/{today}.png"
 
-    # 畫圖
-    plt.figure(figsize=(12,6))
+    plt.figure(figsize=(12, 6))
     plt.plot(df_all['date'], df_all['Close'], label="Real/Pred Close")
     plt.plot(df_all['date'], df_all['SMA_5'], label="SMA 5")
     plt.plot(df_all['date'], df_all['SMA_10'], label="SMA 10")
     plt.legend()
     plt.title("2301.TW 預測 + 5/10 日線")
 
-    # 儲存成檔案（覆蓋式）
     plt.savefig(file_path, dpi=300, bbox_inches='tight')
     plt.close()
 
     print(f"📌 圖片已儲存：{file_path}")
 
 
-
 # ============================ ▶️ 主流程 ============================
 if __name__ == "__main__":
-    df = fetch_and_calculate()
-    save_to_firestore(df)
+    df = fetch_and_calculate()          # 抓股價 + 指標
+    save_to_firestore(df)               # 寫入 Firestore
 
-    df_train = read_from_firestore()
+    df_train = read_from_firestore()    # 讀 Firestore
     model, scaler, scaled = train_lstm(df_train)
 
     df_future = predict_future(model, scaler, scaled, df_train)
