@@ -314,45 +314,45 @@ def predict_future_ma(model, scaler_x, scaler_y, X_scaled, df):
 # ============================ 📈 畫圖（每日刻度 + 從今天開始） ============================
 import pytz
 
-def plot_all(df_real, df_future):
+def plot_all(df_real, df_future, hist_days=30):
     df_real['date'] = pd.to_datetime(df_real.index)
     df_future['date'] = pd.to_datetime(df_future['date'])
 
-    # 取得今天日期，並加上與 df_real 相同的時區
-    tz = df_real['date'].dt.tz  # Asia/Taipei
-    today = pd.Timestamp(datetime.now()).tz_localize(tz)
+    # 取最後 hist_days 天歷史資料
+    df_plot_real = df_real.iloc[-hist_days:]
 
-    # 找出歷史資料中最接近今天的那一天
-    last_hist_date = df_real[df_real['date'] <= today]['date'].max()
-    df_plot_real = df_real[df_real['date'] == last_hist_date]
+    plt.figure(figsize=(16,8))  # 放大圖尺寸
 
-    plt.figure(figsize=(12,6))
-
-    # 畫最後一天的實線：Close / SMA5 / SMA10
+    # 畫歷史實線
     plt.plot(df_plot_real['date'], df_plot_real['Close'], label="Close", color="blue", linestyle='-')
     plt.plot(df_plot_real['date'], df_plot_real['SMA_5'], label="SMA5", color="green", linestyle='-')
     plt.plot(df_plot_real['date'], df_plot_real['SMA_10'], label="SMA10", color="orange", linestyle='-')
 
-    # 畫預測 MA5 / MA10，虛線
+    # 畫未來預測虛線
     plt.plot(df_future['date'], df_future['Pred_MA5'], '--', label="Pred MA5", color="lime")
     plt.plot(df_future['date'], df_future['Pred_MA10'], '--', label="Pred MA10", color="red")
 
-    # X 軸以日為單位
+    # X 軸以日為單位，範圍從歷史到預測最後一天
+    all_dates = pd.concat([df_plot_real['date'], df_future['date']])
+    plt.xlim(all_dates.min(), all_dates.max())
+
     plt.gca().xaxis.set_major_locator(plt.MultipleLocator(1))
     plt.gcf().autofmt_xdate(rotation=45)
 
     plt.legend()
-    plt.title("2301.TW 預測 5/10 日線（每日刻度）")
+    plt.title("2301.TW 歷史 + 預測 5/10 日線（每日刻度）")
     plt.xlabel("Date")
     plt.ylabel("Price")
 
     results_dir = "results"
     if not os.path.exists(results_dir):
         os.makedirs(results_dir)
-    file_path = f"{results_dir}/{today.strftime('%Y-%m-%d')}.png"
+    today = datetime.now().strftime("%Y-%m-%d")
+    file_path = f"{results_dir}/{today}.png"
     plt.savefig(file_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"📌 圖片已儲存：{file_path}")
+
 
 
 # ============================ ▶️ 主流程 ============================
