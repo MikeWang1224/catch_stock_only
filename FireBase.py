@@ -177,8 +177,7 @@ def compute_pred_ma_from_pred_closes(last_known_closes, pred_closes):
 # ---------------- 畫圖函式（交易日版，預測線連接歷史線） ----------------
 def plot_all(df_real, df_future, hist_days=60):
     df_real = df_real.copy()
-    df_real = df_real.tail(hist_days)
-    df_future = df_future.copy()
+    df_real = df_real.tail(10)  # 顯示最近兩週（約 10 根交易日）
 
     plt.figure(figsize=(16,8))
 
@@ -209,7 +208,7 @@ def plot_all(df_real, df_future, hist_days=60):
     plt.plot(x_future, df_future_plot['Pred_MA5'], '--', label="Pred MA5")
     plt.plot(x_future, df_future_plot['Pred_MA10'], '--', label="Pred MA10")
 
-    # X 軸刻度：每天一個刻度，非交易日自動跳過
+    # X 軸刻度：每天一個刻度
     all_dates = list(df_real.index) + list(df_future['date'])
     plt.xticks(range(len(all_dates)), [pd.Timestamp(d).strftime('%m-%d') for d in all_dates], rotation=45)
 
