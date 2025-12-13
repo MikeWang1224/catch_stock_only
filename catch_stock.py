@@ -5,7 +5,7 @@
 """
  
 import os, json
-import firebase_admin
+import firebase_admin 
 from firebase_admin import credentials, firestore
 import yfinance as yf
 import pandas as pd
