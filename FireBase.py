@@ -9,7 +9,7 @@ FireBase.py
 - 不上傳 Storage（避免付費問題）
 """
 
-import os, math, json
+import os, json
 import numpy as np
 import pandas as pd
 from datetime import datetime
@@ -17,8 +17,6 @@ import matplotlib.pyplot as plt
 from pandas.tseries.offsets import BDay
 
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense, Dropout
 from tensorflow.keras.callbacks import EarlyStopping
@@ -51,6 +49,7 @@ def load_df_from_firestore(ticker, collection="NEW_stock_data_liteon", days=400)
     df = pd.DataFrame(rows)
     if df.empty:
         raise ValueError("⚠️ Firestore 無資料")
+
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values("date").tail(days).set_index("date")
     return df
@@ -115,30 +114,46 @@ def build_lstm(input_shape, steps):
     m.compile(optimizer="adam", loss="mae")
     return m
 
-# ================= 畫圖 =================
+# ================= 畫圖（修正版） =================
 def plot_and_save(df_hist, future_df):
     hist = df_hist.tail(10)
     if hist.empty:
-        hist = df_hist.tail(1)  # 至少取一筆
+        hist = df_hist.tail(1)
+
+    last_close = hist["Close"].iloc[-1]
+    last_sma5 = hist["SMA5"].iloc[-1]
+    last_sma10 = hist["SMA10"].iloc[-1]
+    last_date = hist.index[-1]
 
     plt.figure(figsize=(16,8))
+
+    # === 歷史 ===
     plt.plot(hist.index, hist["Close"], label="Close")
     plt.plot(hist.index, hist["SMA5"], label="SMA5")
     plt.plot(hist.index, hist["SMA10"], label="SMA10")
 
-    # 接上預測
-    start_date = hist.index[-1]
+    # === 預測 Close（已連） ===
     plt.plot(
-        [start_date] + list(future_df["date"]),
-        [hist["Close"].iloc[-1]] + list(future_df["Pred_Close"]),
+        [last_date] + list(future_df["date"]),
+        [last_close] + list(future_df["Pred_Close"]),
         "r:o", label="Pred Close"
     )
 
-    plt.plot(future_df["date"], future_df["Pred_MA5"], "--", label="Pred MA5")
-    plt.plot(future_df["date"], future_df["Pred_MA10"], "--", label="Pred MA10")
+    # === 預測 MA（修正：接上最後一筆真實 MA） ===
+    plt.plot(
+        [last_date] + list(future_df["date"]),
+        [last_sma5] + list(future_df["Pred_MA5"]),
+        "g--o", label="Pred MA5"
+    )
+
+    plt.plot(
+        [last_date] + list(future_df["date"]),
+        [last_sma10] + list(future_df["Pred_MA10"]),
+        "b--o", label="Pred MA10"
+    )
 
     plt.legend()
-    plt.title("2301.TW LSTM 預測")
+    plt.title("2301.TW LSTM 預測（MA 已連續）")
 
     os.makedirs("results", exist_ok=True)
     fname = f"{datetime.now().strftime('%Y-%m-%d')}_pred.png"
@@ -170,6 +185,7 @@ if __name__ == "__main__":
 
     X, y = create_sequences(df, FEATURES, STEPS, LOOKBACK)
     split = int(len(X) * 0.85)
+
     X_tr, X_te = X[:split], X[split:]
     y_tr, y_te = y[:split], y[split:]
 
@@ -181,14 +197,20 @@ if __name__ == "__main__":
     y_tr_s = sy.fit_transform(y_tr)
 
     model = build_lstm((LOOKBACK, len(FEATURES)), STEPS)
-    model.fit(X_tr_s, y_tr_s, epochs=50, batch_size=32, verbose=2,
-              callbacks=[EarlyStopping(patience=6, restore_best_weights=True)])
+    model.fit(
+        X_tr_s, y_tr_s,
+        epochs=50,
+        batch_size=32,
+        verbose=2,
+        callbacks=[EarlyStopping(patience=6, restore_best_weights=True)]
+    )
 
     preds = sy.inverse_transform(model.predict(X_te_s))
-    last_window_closes = X_te[-1][:,0]
 
-    # 預測 MA
+    # === 預測 MA（從最後視窗延伸） ===
+    last_window_closes = X_te[-1][:, 0]
     seq = list(last_window_closes)
+
     future = []
     for p in preds[-1]:
         seq.append(p)
@@ -198,7 +220,7 @@ if __name__ == "__main__":
             "Pred_MA10": np.mean(seq[-10:])
         })
 
-    start = (pd.Timestamp(datetime.now().date()) + BDay(1))
+    start = pd.Timestamp(datetime.now().date()) + BDay(1)
     future_df = pd.DataFrame(future)
     future_df["date"] = pd.bdate_range(start=start, periods=STEPS)
 
