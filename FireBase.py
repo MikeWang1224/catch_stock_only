@@ -114,11 +114,9 @@ def build_lstm(input_shape, steps):
     m.compile(optimizer="adam", loss="mae")
     return m
 
-# ================= 畫圖（修正版） =================
+# ================= 畫圖 =================
 def plot_and_save(df_hist, future_df):
     hist = df_hist.tail(10)
-    if hist.empty:
-        hist = df_hist.tail(1)
 
     last_close = hist["Close"].iloc[-1]
     last_sma5 = hist["SMA5"].iloc[-1]
@@ -126,20 +124,16 @@ def plot_and_save(df_hist, future_df):
     last_date = hist.index[-1]
 
     plt.figure(figsize=(16,8))
-
-    # === 歷史 ===
     plt.plot(hist.index, hist["Close"], label="Close")
     plt.plot(hist.index, hist["SMA5"], label="SMA5")
     plt.plot(hist.index, hist["SMA10"], label="SMA10")
 
-    # === 預測 Close（已連） ===
     plt.plot(
         [last_date] + list(future_df["date"]),
         [last_close] + list(future_df["Pred_Close"]),
         "r:o", label="Pred Close"
     )
 
-    # === 預測 MA（修正：接上最後一筆真實 MA） ===
     plt.plot(
         [last_date] + list(future_df["date"]),
         [last_sma5] + list(future_df["Pred_MA5"]),
@@ -153,16 +147,12 @@ def plot_and_save(df_hist, future_df):
     )
 
     plt.legend()
-    plt.title("2301.TW LSTM 預測（MA 已連續）")
+    plt.title("2301.TW LSTM 預測（假日已正確處理）")
 
     os.makedirs("results", exist_ok=True)
     fname = f"{datetime.now().strftime('%Y-%m-%d')}_pred.png"
-    fpath = os.path.join("results", fname)
-    plt.savefig(fpath, dpi=300, bbox_inches="tight")
+    plt.savefig(os.path.join("results", fname), dpi=300, bbox_inches="tight")
     plt.close()
-
-    print(f"📈 圖片已輸出：{fpath}")
-    return fpath
 
 # ================= Main =================
 if __name__ == "__main__":
@@ -187,7 +177,7 @@ if __name__ == "__main__":
     split = int(len(X) * 0.85)
 
     X_tr, X_te = X[:split], X[split:]
-    y_tr, y_te = y[:split], y[split:]
+    y_tr = y[:split]
 
     sx = MinMaxScaler()
     X_tr_s = sx.fit_transform(X_tr.reshape(-1, X_tr.shape[-1])).reshape(X_tr.shape)
@@ -207,10 +197,12 @@ if __name__ == "__main__":
 
     preds = sy.inverse_transform(model.predict(X_te_s))
 
-    # === 預測 MA（從最後視窗延伸） ===
-    last_window_closes = X_te[-1][:, 0]
-    seq = list(last_window_closes)
+    # ====== 🔑 正確的 MA 預測（假日安全） ======
+    today = pd.Timestamp(datetime.now().date())
+    last_real_trade_date = df.index[df.index < today][-1]
+    last_real_closes = df.loc[:last_real_trade_date, "Close"].iloc[-10:].tolist()
 
+    seq = last_real_closes.copy()
     future = []
     for p in preds[-1]:
         seq.append(p)
@@ -220,8 +212,10 @@ if __name__ == "__main__":
             "Pred_MA10": np.mean(seq[-10:])
         })
 
-    start = pd.Timestamp(datetime.now().date()) + BDay(1)
     future_df = pd.DataFrame(future)
-    future_df["date"] = pd.bdate_range(start=start, periods=STEPS)
+    future_df["date"] = pd.bdate_range(
+        start=last_real_trade_date + BDay(1),
+        periods=STEPS
+    )
 
     plot_and_save(df, future_df)
