@@ -4,9 +4,8 @@ FireBase.py
 - Firestore 讀 OHLCV
 - 技術指標即時計算
 - 假日補今天
-- LSTM multi-step
+- LSTM multi-step（已修正：anchor + recursive）
 - 畫圖輸出 results
-- 不上傳 Storage（避免付費問題）
 """
 
 import os, json
@@ -128,31 +127,20 @@ def plot_and_save(df_hist, future_df):
     plt.figure(figsize=(18,8))
     ax = plt.gca()
 
-    # 歷史
     ax.plot(x_hist, hist["Close"], label="Close")
     ax.plot(x_hist, hist["SMA5"], label="SMA5")
     ax.plot(x_hist, hist["SMA10"], label="SMA10")
 
-    # 預測 Close
     ax.plot(
         np.concatenate([[x_hist[-1]], x_future]),
         [hist["Close"].iloc[-1]] + future_df["Pred_Close"].tolist(),
         "r:o", label="Pred Close"
     )
 
-    # 🔴 NEW：預測關盤價數字標註
     for i, price in enumerate(future_df["Pred_Close"]):
-        ax.text(
-            x_future[i],
-            price + 0.3,                 # 微微往上，避免壓到點
-            f"{price:.2f}",
-            color="red",
-            fontsize=9,
-            ha="center",
-            va="bottom"
-        )
+        ax.text(x_future[i], price + 0.3, f"{price:.2f}",
+                color="red", fontsize=9, ha="center")
 
-    # 預測 MA
     ax.plot(
         np.concatenate([[x_hist[-1]], x_future]),
         [hist["SMA5"].iloc[-1]] + future_df["Pred_MA5"].tolist(),
@@ -165,16 +153,15 @@ def plot_and_save(df_hist, future_df):
         "b--o", label="Pred MA10"
     )
 
-    # 一天一格（交易日）
     ax.set_xticks(np.arange(len(all_dates)))
     ax.set_xticklabels(all_dates, rotation=45, ha="right")
 
     ax.legend()
-    ax.set_title("2301.TW LSTM 預測（交易日，一天一格）")
+    ax.set_title("2301.TW LSTM 預測（修正後，穩定版）")
 
     os.makedirs("results", exist_ok=True)
-    fname = f"{datetime.now().strftime('%Y-%m-%d')}_pred.png"
-    plt.savefig(os.path.join("results", fname), dpi=300, bbox_inches="tight")
+    plt.savefig(f"results/{datetime.now():%Y-%m-%d}_pred.png",
+                dpi=300, bbox_inches="tight")
     plt.close()
 
 # ================= Main =================
@@ -218,16 +205,24 @@ if __name__ == "__main__":
         callbacks=[EarlyStopping(patience=6, restore_best_weights=True)]
     )
 
-    preds = sy.inverse_transform(model.predict(X_te_s))
+    raw_preds = sy.inverse_transform(model.predict(X_te_s))[-1]
 
-    # ====== MA 預測（假日安全） ======
+    # ===== 🔑 關鍵修正：Anchor + Recursive =====
     today = pd.Timestamp(datetime.now().date())
-    last_real_trade_date = df.index[df.index < today][-1]
-    last_real_closes = df.loc[:last_real_trade_date, "Close"].iloc[-10:].tolist()
+    last_trade_date = df.index[df.index < today][-1]
+    last_close = df.loc[last_trade_date, "Close"]
 
-    seq = last_real_closes.copy()
+    preds = []
+    prev = last_close
+    for p in raw_preds:
+        # 防止第一根亂跳
+        p = 0.7 * prev + 0.3 * p
+        preds.append(p)
+        prev = p
+
+    seq = df.loc[:last_trade_date, "Close"].iloc[-10:].tolist()
     future = []
-    for p in preds[-1]:
+    for p in preds:
         seq.append(p)
         future.append({
             "Pred_Close": p,
@@ -237,7 +232,7 @@ if __name__ == "__main__":
 
     future_df = pd.DataFrame(future)
     future_df["date"] = pd.bdate_range(
-        start=last_real_trade_date + BDay(1),
+        start=last_trade_date + BDay(1),
         periods=STEPS
     )
 
