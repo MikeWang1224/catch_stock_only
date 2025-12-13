@@ -118,41 +118,51 @@ def build_lstm(input_shape, steps):
 def plot_and_save(df_hist, future_df):
     hist = df_hist.tail(10)
 
-    last_close = hist["Close"].iloc[-1]
-    last_sma5 = hist["SMA5"].iloc[-1]
-    last_sma10 = hist["SMA10"].iloc[-1]
-    last_date = hist.index[-1]
+    hist_dates = hist.index.strftime("%Y-%m-%d").tolist()
+    future_dates = future_df["date"].dt.strftime("%Y-%m-%d").tolist()
+
+    all_dates = hist_dates + future_dates
+    x_hist = np.arange(len(hist_dates))
+    x_future = np.arange(len(hist_dates), len(all_dates))
 
     plt.figure(figsize=(16,8))
-    plt.plot(hist.index, hist["Close"], label="Close")
-    plt.plot(hist.index, hist["SMA5"], label="SMA5")
-    plt.plot(hist.index, hist["SMA10"], label="SMA10")
+
+    plt.plot(x_hist, hist["Close"], label="Close")
+    plt.plot(x_hist, hist["SMA5"], label="SMA5")
+    plt.plot(x_hist, hist["SMA10"], label="SMA10")
 
     plt.plot(
-        [last_date] + list(future_df["date"]),
-        [last_close] + list(future_df["Pred_Close"]),
+        np.concatenate([[x_hist[-1]], x_future]),
+        [hist["Close"].iloc[-1]] + future_df["Pred_Close"].tolist(),
         "r:o", label="Pred Close"
     )
 
     plt.plot(
-        [last_date] + list(future_df["date"]),
-        [last_sma5] + list(future_df["Pred_MA5"]),
+        np.concatenate([[x_hist[-1]], x_future]),
+        [hist["SMA5"].iloc[-1]] + future_df["Pred_MA5"].tolist(),
         "g--o", label="Pred MA5"
     )
 
     plt.plot(
-        [last_date] + list(future_df["date"]),
-        [last_sma10] + list(future_df["Pred_MA10"]),
+        np.concatenate([[x_hist[-1]], x_future]),
+        [hist["SMA10"].iloc[-1]] + future_df["Pred_MA10"].tolist(),
         "b--o", label="Pred MA10"
     )
 
+    plt.xticks(
+        ticks=np.arange(len(all_dates)),
+        labels=all_dates,
+        rotation=45
+    )
+
     plt.legend()
-    plt.title("2301.TW LSTM 預測（假日已正確處理）")
+    plt.title("2301.TW LSTM 預測（僅交易日，不留白）")
 
     os.makedirs("results", exist_ok=True)
     fname = f"{datetime.now().strftime('%Y-%m-%d')}_pred.png"
     plt.savefig(os.path.join("results", fname), dpi=300, bbox_inches="tight")
     plt.close()
+
 
 # ================= Main =================
 if __name__ == "__main__":
