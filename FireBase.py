@@ -45,31 +45,40 @@ if key_dict:
         bucket = None
 
 # ================= 從 Firestore 讀取 df =================
-def load_df_from_firestore(ticker="2301.TW", collection="NEW_stock_data_liteon", days=400):
+# ================= 從 Firestore 讀取 df（免 index 版） =================
+def load_df_from_firestore(
+    ticker="2301.TW",
+    collection="NEW_stock_data_liteon",
+    days=400
+):
     if db is None:
         raise RuntimeError("Firestore 未初始化")
 
-    docs = (
-        db.collection(collection)
-        .order_by("__name__", direction=firestore.Query.DESCENDING)
-        .limit(days)
-        .stream()
-    )
+    docs = db.collection(collection).stream()
 
     rows = []
     for doc in docs:
         payload = doc.to_dict().get(ticker)
         if not payload:
             continue
-        rows.append({"date": doc.id, **payload})
+        rows.append({
+            "date": doc.id,
+            **payload
+        })
 
     if not rows:
         raise RuntimeError("Firestore 無任何股價資料")
 
     df = pd.DataFrame(rows)
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.sort_values("date").set_index("date")
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"])
+
+    # 👉 在 pandas 內排序 + 截斷
+    df = df.sort_values("date").tail(days)
+    df = df.set_index("date")
+
     return df
+
 
 # ================= Dataset helpers =================
 def create_sequences(df, features, target_steps=10, window=60):
