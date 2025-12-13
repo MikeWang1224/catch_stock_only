@@ -5,7 +5,8 @@ on:
     branches:
       - main
   schedule:
-    - cron: '55 5 * * *'  # 每天 UTC 05:55 = 台灣 13:55
+    # 每天 UTC 05:50 = 台灣時間 13:50
+    - cron: '50 5 * * *'
 
 permissions:
   contents: write
@@ -36,12 +37,21 @@ jobs:
             scikit-learn \
             tensorflow
 
-      - name: Run stock prediction program
+      # ---------------- 先抓股價 + 技術指標 ----------------
+      - name: Run stock data collection (catch_stock.py)
+        env:
+          FIREBASE: ${{ secrets.FIREBASE }}
+        run: |
+          python catch_stock.py
+
+      # ---------------- 再跑 LSTM / 預測 / 繪圖 ----------------
+      - name: Run stock prediction program (FireBase.py)
         env:
           FIREBASE: ${{ secrets.FIREBASE }}
         run: |
           python FireBase.py
 
+      # ---------------- Commit 圖表結果 ----------------
       - name: Commit & push result chart
         run: |
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
