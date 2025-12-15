@@ -2,8 +2,12 @@
 """
 FireBase_Transformer_Direction.py
 - Transformer Encoder (MultiHeadAttention)
-- Multi-task: Return path (steps) + Direction
-- Walk-forward backtest (expanding window folds)
+- Multi-task: Return path + Direction
+- ✅ 小資料友善版：更穩、更不容易亂噴
+  1) LOOKBACK=40, STEPS=5（樣本變多、短期更穩）
+  2) Transformer 變小（d_model=32, heads=2, depth=1, dropout=0.2）
+  3) Walk-forward：folds=2 + 固定 val_len=25（資料少更穩）
+  4) features 減肥（小資料避免噪音）：log_ret / hl_range / gap / Volume / ATR_14
 - 圖表輸出完全不變（保留 Today 標記）
 """
 
@@ -18,7 +22,7 @@ from sklearn.preprocessing import MinMaxScaler
 import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import (
-    Input, Dense, Dropout, Softmax, Lambda,
+    Input, Dense, Dropout,
     LayerNormalization, MultiHeadAttention, Add, GlobalAveragePooling1D
 )
 from tensorflow.keras.callbacks import EarlyStopping
@@ -65,36 +69,35 @@ def ensure_today_row(df):
         print(f"⚠️ 今日無資料，使用 {last_date.date()} 補今日")
     return df.sort_index()
 
-# ================= Feature Engineering（主流：用相對特徵 + OHLCV + 指標） =================
+# ================= Feature Engineering =================
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
-    # 相對/報酬特徵（更穩、也更像主流）
+    # 相對/報酬特徵（主流、也較穩）
     df["log_ret"]  = np.log(df["Close"]).diff()
-    df["oc_ret"]   = np.log(df["Close"] / df["Open"])                 # 當日強弱
-    df["hl_range"] = (df["High"] - df["Low"]) / df["Close"]           # 震盪幅度
-    df["gap"]      = np.log(df["Open"] / df["Close"].shift(1))        # 跳空
+    df["oc_ret"]   = np.log(df["Close"] / df["Open"])
+    df["hl_range"] = (df["High"] - df["Low"]) / df["Close"]
+    df["gap"]      = np.log(df["Open"] / df["Close"].shift(1))
 
-    # 你原本圖表用到的均線（保持不變）
+    # 圖表用均線（保持不變）
     df["SMA5"] = df["Close"].rolling(5).mean()
     df["SMA10"] = df["Close"].rolling(10).mean()
     return df
 
-# ================= Sequence（避免錯位：用 close 算 target，不去亂切 df） =================
-def create_sequences(df, features, steps=10, window=60):
+# ================= Sequence（避免錯位） =================
+def create_sequences(df, features, steps=5, window=40):
     """
-    X: df[features] 的 window 序列（t-window ~ t-1）
-    y_ret: 未來 steps 天的 log return（t ~ t+steps-1）
-    y_dir: 未來 steps 天累積報酬方向（sum(y_ret) > 0）
+    X: t-window ~ t-1
+    y_ret: t ~ t+steps-1 的 log return
+    y_dir: 未來 steps 天累積方向
     """
     X, y_ret, y_dir = [], [], []
 
     close = df["Close"].astype(float)
-    logret = np.log(close).diff()   # index 對齊 df
+    logret = np.log(close).diff()
     feat = df[features].values
 
-    # i 代表「預測起點 t」
     for i in range(window, len(df) - steps):
-        x_seq = feat[i - window:i]                # t-window ~ t-1
-        future_ret = logret.iloc[i:i + steps].values  # t ~ t+steps-1
+        x_seq = feat[i - window:i]
+        future_ret = logret.iloc[i:i + steps].values
         if np.any(np.isnan(future_ret)) or np.any(np.isnan(x_seq)):
             continue
         X.append(x_seq)
@@ -104,14 +107,12 @@ def create_sequences(df, features, steps=10, window=60):
     return np.array(X), np.array(y_ret), np.array(y_dir)
 
 # ================= Transformer Encoder Block =================
-def transformer_block(x, d_model, num_heads, ff_dim, dropout=0.1):
-    # Self-attention
+def transformer_block(x, d_model, num_heads, ff_dim, dropout=0.2):
     attn_out = MultiHeadAttention(num_heads=num_heads, key_dim=d_model)(x, x)
     attn_out = Dropout(dropout)(attn_out)
     x = Add()([x, attn_out])
     x = LayerNormalization(epsilon=1e-6)(x)
 
-    # Feed-forward
     ff_out = Dense(ff_dim, activation="relu")(x)
     ff_out = Dropout(dropout)(ff_out)
     ff_out = Dense(d_model)(ff_out)
@@ -119,17 +120,15 @@ def transformer_block(x, d_model, num_heads, ff_dim, dropout=0.1):
     x = LayerNormalization(epsilon=1e-6)(x)
     return x
 
-# ================= Model（主流：Transformer + pooling） =================
-def build_transformer_model(input_shape, steps, d_model=64, num_heads=4, ff_dim=128, depth=2, dropout=0.1):
+# ================= Model（小資料友善：更小、更強 dropout） =================
+def build_transformer_model(input_shape, steps,
+                            d_model=32, num_heads=2, ff_dim=64, depth=1, dropout=0.2):
     inp = Input(shape=input_shape)
-
-    # projection：把 feature_dim 投影到 d_model（主流做法）
     x = Dense(d_model)(inp)
 
     for _ in range(depth):
         x = transformer_block(x, d_model=d_model, num_heads=num_heads, ff_dim=ff_dim, dropout=dropout)
 
-    # pooling：用 GAP（主流 baseline，穩）
     context = GlobalAveragePooling1D()(x)
     context = Dropout(dropout)(context)
 
@@ -138,7 +137,7 @@ def build_transformer_model(input_shape, steps, d_model=64, num_heads=4, ff_dim=
 
     model = Model(inp, [out_ret, out_dir])
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-3),
+        optimizer=tf.keras.optimizers.Adam(learning_rate=7e-4),  # 稍微小一點更穩
         loss={
             "return": tf.keras.losses.Huber(),
             "direction": "binary_crossentropy"
@@ -170,7 +169,6 @@ def plot_and_save(df_hist, future_df):
     ax.plot(x_hist, hist["SMA5"], label="SMA5")
     ax.plot(x_hist, hist["SMA10"], label="SMA10")
 
-    # ✅ Today 點與文字（hist 最後一個點）
     today_x = x_hist[-1]
     today_y = float(hist["Close"].iloc[-1])
     ax.scatter([today_x], [today_y], marker="*", s=160, label="Today Close")
@@ -202,7 +200,7 @@ def plot_and_save(df_hist, future_df):
     ax.set_xticks(np.arange(len(all_dates)))
     ax.set_xticklabels(all_dates, rotation=45, ha="right")
     ax.legend()
-    ax.set_title("2301.TW Attention-LSTM 預測")  # ✅ 標題也不改，維持你原本命名
+    ax.set_title("2301.TW Attention-LSTM 預測")
 
     os.makedirs("results", exist_ok=True)
     plt.savefig(f"results/{datetime.now():%Y-%m-%d}_pred.png",
@@ -248,28 +246,30 @@ def plot_backtest_error(df, X_te_s, y_te, model, steps):
     )
     plt.close()
 
-# ================= Walk-forward（主流：rolling/expanding） =================
-def walk_forward_evaluate(X, y_ret, y_dir, features_df_for_scaler, features, lookback,
-                          steps, folds=4, train_min=0.55, val_frac=0.12, seed=42):
-    """
-    expanding window：
-    - 每 fold：用前面一段 train，後面接一段 val
-    - scaler 只 fit 在 train 對應的原 features df 範圍（更接近真實）
-    """
+# ================= Walk-forward（小資料友善：少 folds + 固定 val_len） =================
+def walk_forward_evaluate(
+    X, y_ret, y_dir,
+    features_df_for_scaler, features,
+    lookback, steps,
+    folds=2, val_len=25, train_min=0.70, seed=42
+):
     tf.random.set_seed(seed)
     np.random.seed(seed)
 
     n = len(X)
-    if n < 200:
-        print("⚠️ 樣本偏少，walk-forward folds 可能不穩；仍會繼續跑。")
+    if n < (val_len * 3):
+        print("⚠️ 可用序列真的偏少，walk-forward 只做極少 fold 會比較合理。")
+
+    # 起始訓練長度
+    start_train_end = max(int(n * train_min), lookback + 10)
+    # 每折往後推進的距離
+    max_train_end = n - val_len - 1
+    if max_train_end <= start_train_end:
+        start_train_end = max(n - val_len - 1, lookback + 10)
+
+    train_ends = np.linspace(start_train_end, max_train_end, folds).astype(int)
 
     fold_metrics = []
-    start_train_end = int(n * train_min)
-    val_len = max(int(n * val_frac), 30)
-
-    # fold 的 train_end 逐步往後推
-    train_ends = np.linspace(start_train_end, n - val_len - 1, folds).astype(int)
-
     for k, train_end in enumerate(train_ends, start=1):
         tr_slice = slice(0, train_end)
         va_slice = slice(train_end, train_end + val_len)
@@ -278,8 +278,7 @@ def walk_forward_evaluate(X, y_ret, y_dir, features_df_for_scaler, features, loo
         y_ret_tr, y_ret_va = y_ret[tr_slice], y_ret[va_slice]
         y_dir_tr, y_dir_va = y_dir[tr_slice], y_dir[va_slice]
 
-        # scaler：只看 train 的資料（用 features_df_for_scaler 的前段）
-        # 這裡用「train_end + lookback」近似對齊到 df 的位置（保守）
+        # scaler：只 fit 在 train 範圍（保守）
         fit_end = min(train_end + lookback, len(features_df_for_scaler))
         sx = MinMaxScaler()
         sx.fit(features_df_for_scaler[features].iloc[:fit_end])
@@ -296,21 +295,19 @@ def walk_forward_evaluate(X, y_ret, y_dir, features_df_for_scaler, features, loo
         model.fit(
             X_tr_s,
             {"return": y_ret_tr, "direction": y_dir_tr},
-            epochs=40,
-            batch_size=32,
+            epochs=60,                    # 小資料多給 epoch，靠 early stop
+            batch_size=16,                # 小資料 batch 小一點較穩
             verbose=0,
-            callbacks=[EarlyStopping(patience=6, restore_best_weights=True)]
+            callbacks=[EarlyStopping(patience=8, restore_best_weights=True)]
         )
 
         pred_ret, pred_dir = model.predict(X_va_s, verbose=0)
-        # direction metrics
+
         dir_prob = pred_dir.reshape(-1)
         dir_pred = (dir_prob >= 0.5).astype(int)
         dir_true = y_dir_va.astype(int)
-
         acc = (dir_pred == dir_true).mean()
 
-        # return metrics：用「累積報酬」的 MAE（更符合多期預測）
         true_cum = y_ret_va.sum(axis=1)
         pred_cum = pred_ret.sum(axis=1)
         mae_cum = np.mean(np.abs(true_cum - pred_cum))
@@ -319,7 +316,6 @@ def walk_forward_evaluate(X, y_ret, y_dir, features_df_for_scaler, features, loo
         fold_metrics.append((acc, mae_cum, rmse_cum))
         print(f"[WF Fold {k}/{folds}] dir_acc={acc:.3f} | cumRet_MAE={mae_cum:.4f} | cumRet_RMSE={rmse_cum:.4f}")
 
-    # summary
     accs = [m[0] for m in fold_metrics]
     maes = [m[1] for m in fold_metrics]
     rmses = [m[2] for m in fold_metrics]
@@ -328,48 +324,49 @@ def walk_forward_evaluate(X, y_ret, y_dir, features_df_for_scaler, features, loo
 # ================= Main =================
 if __name__ == "__main__":
     TICKER = "2301.TW"
-    LOOKBACK = 60
-    STEPS = 10
 
-    df = load_df_from_firestore(TICKER)
+    # ✅ 小資料友善設定
+    LOOKBACK = 40
+    STEPS = 5
+
+    df = load_df_from_firestore(TICKER, days=500)
     df = ensure_today_row(df)
-
-    # 加入衍生特徵（主流做法）
     df = add_features(df)
 
-    # ✅ 主流 FEATURES（相對特徵 + 量 + 你原本指標）
+    # ✅ 小資料：特徵減肥（先穩再說）
     FEATURES = [
-        "log_ret", "oc_ret", "hl_range", "gap",
-        "Volume", "RSI", "MACD", "K", "D", "ATR_14"
+        "log_ret", "hl_range", "gap",
+        "Volume", "ATR_14"
     ]
 
-    # 清掉前期 NaN（來自 rolling / diff）
     df = df.dropna()
 
-    # 建序列
-    X, y_ret, y_dir = create_sequences(df, FEATURES, STEPS, LOOKBACK)
-    if len(X) < 50:
-        raise ValueError("⚠️ 可用序列太少，請增加 days 或檢查資料是否缺欄位/過多 NaN。")
+    X, y_ret, y_dir = create_sequences(df, FEATURES, steps=STEPS, window=LOOKBACK)
+    print(f"df rows: {len(df)} | X samples: {len(X)}")
 
-    # ========= Walk-forward 評估（主流） =========
-    # 用 df[FEATURES] 當 scaler 參考（只會 fit 到 train 段）
+    if len(X) < 40:
+        raise ValueError("⚠️ 可用序列太少（<40）。建議：降低 LOOKBACK/STE��S，或檢查資料是否缺欄位/過多 NaN。")
+
+    # ========= Walk-forward（小資料友善） =========
     walk_forward_evaluate(
         X, y_ret, y_dir,
         features_df_for_scaler=df,
         features=FEATURES,
         lookback=LOOKBACK,
         steps=STEPS,
-        folds=4
+        folds=2,
+        val_len=25,
+        train_min=0.70
     )
 
-    # ========= 最終模型：用最後 15% 當 test（跟你原本流程一致，方便出圖） =========
+    # ========= 最終模型：用最後 15% 當 test（保留你原本流程，方便出圖） =========
     split = int(len(X) * 0.85)
     X_tr, X_te = X[:split], X[split:]
     y_ret_tr, y_ret_te = y_ret[:split], y_ret[split:]
     y_dir_tr, y_dir_te = y_dir[:split], y_dir[split:]
 
     sx = MinMaxScaler()
-    sx.fit(df[FEATURES].iloc[:split + LOOKBACK])
+    sx.fit(df[FEATURES].iloc[:min(split + LOOKBACK, len(df))])
 
     def scale_X(Xb):
         n, t, f = Xb.shape
@@ -378,19 +375,20 @@ if __name__ == "__main__":
     X_tr_s = scale_X(X_tr)
     X_te_s = scale_X(X_te)
 
-    model = build_transformer_model((LOOKBACK, len(FEATURES)), STEPS)
+    model = build_transformer_model((LOOKBACK, len(FEATURES)), STEPS,
+                                    d_model=32, num_heads=2, ff_dim=64, depth=1, dropout=0.2)
 
     model.fit(
         X_tr_s,
         {"return": y_ret_tr, "direction": y_dir_tr},
-        epochs=50,
-        batch_size=32,
+        epochs=80,
+        batch_size=16,
         verbose=2,
-        callbacks=[EarlyStopping(patience=6, restore_best_weights=True)]
+        callbacks=[EarlyStopping(patience=10, restore_best_weights=True)]
     )
 
     pred_ret, pred_dir = model.predict(X_te_s, verbose=0)
-    raw_returns = pred_ret[-1]      # ✅ 不再 clip（主流比較不會硬剪）
+    raw_returns = pred_ret[-1]  # ✅ 不 clip（但模型更小+短 horizon，會自然穩很多）
 
     print(f"📈 預測方向機率（看漲）: {pred_dir[-1][0]:.2%}")
 
@@ -420,6 +418,5 @@ if __name__ == "__main__":
         periods=STEPS
     )
 
-    # ✅ 圖表函式完全不動
     plot_and_save(df, future_df)
     plot_backtest_error(df, X_te_s, y_ret_te, model, STEPS)
