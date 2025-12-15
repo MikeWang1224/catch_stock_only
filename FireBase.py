@@ -82,13 +82,17 @@ def create_sequences(df, features, steps=10, window=60):
 
 # ================= Weighted Loss =================
 def weighted_huber_loss(steps):
-    weights = tf.linspace(1.0, 0.3, steps)
+    weights = tf.reshape(
+        tf.linspace(1.0, 0.3, steps),
+        (1, steps)
+    )
 
     def loss(y_true, y_pred):
-        err = tf.keras.losses.huber(y_true, y_pred)
+        err = tf.keras.losses.huber(y_true, y_pred)  # (batch, steps)
         return tf.reduce_mean(err * weights)
 
     return loss
+
 
 # ================= LSTM（雙層） =================
 def build_lstm(input_shape, steps):
