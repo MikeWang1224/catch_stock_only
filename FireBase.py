@@ -178,7 +178,7 @@ def plot_and_save(df_hist, future_df):
     today_y = float(hist["Close"].iloc[-1])
     ax.scatter([today_x], [today_y], marker="*", s=160, label="Today Close")
     ax.text(today_x, today_y + 0.3, f"Today {today_y:.2f}",
-            fontsize=19, ha="center")
+            fontsize=17, ha="center")
 
     ax.plot(
         np.concatenate([[x_hist[-1]], x_future]),
