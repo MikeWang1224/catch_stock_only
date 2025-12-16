@@ -159,8 +159,8 @@ def build_attention_lstm(input_shape, steps, max_daily_logret=0.06):
 # ================= 原預測圖（完全不動：新增 Today 標記） =================
 def plot_and_save(df_hist, future_df):
     hist = df_hist.tail(10)
-    hist_dates = hist.index.strftime("%Y-%m-%d").tolist()
-    future_dates = future_df["date"].dt.strftime("%Y-%m-%d").tolist()
+    hist_dates = hist.index.strftime("%m-%d").tolist()
+    future_dates = future_df["date"].dt.strftime("%m-%d").tolist()
 
     all_dates = hist_dates + future_dates
     x_hist = np.arange(len(hist_dates))
