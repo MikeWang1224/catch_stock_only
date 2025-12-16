@@ -134,38 +134,70 @@ def plot_and_save(df_hist, future_df):
     plt.close()
 
 # ================= 回測圖：昨日預測 vs 今日實際（折線） =================
-def plot_yesterday_forecast_vs_today(df):
+# ================= 回測圖（昨日 forecast.csv + 今日實際） =================
+def plot_backtest_from_forecast_csv(df):
+    """
+    回測圖定義：
+    - 使用「昨天 forecast.csv」中的所有 Pred_Close
+    - 折線畫出 Day+1 ~ Day+STEPS
+    - 最後一點接上「今天實際收盤價」
+    - 不使用模型、不畫今天預測、不輸出 CSV
+    """
+
     today = df.index[-1]
     today_close = float(df["Close"].iloc[-1])
 
-    yday = today - BDay(1)
-    fc_path = f"results/{yday:%Y-%m-%d}_forecast.csv"
+    yesterday = today - BDay(1)
+    fc_path = f"results/{yesterday:%Y-%m-%d}_forecast.csv"
+
     if not os.path.exists(fc_path):
-        print("⚠️ 找不到昨日 forecast.csv")
+        print(f"⚠️ 找不到昨日 forecast.csv：{fc_path}")
         return
 
     fc = pd.read_csv(fc_path)
-    pred_price = float(fc.iloc[0]["Pred_Close"])
-    pred_date = pd.to_datetime(fc.iloc[0]["date"])
+    if fc.empty or "Pred_Close" not in fc.columns:
+        print("⚠️ forecast.csv 內容異常")
+        return
 
-    plt.figure(figsize=(8,5))
+    # 昨天已知的預測
+    pred_dates = pd.to_datetime(fc["date"])
+    pred_prices = fc["Pred_Close"].astype(float).values
+
+    # 將今天實際接到最後
+    all_dates = list(pred_dates) + [today]
+    all_prices = list(pred_prices) + [today_close]
+
+    # === 折線圖 ===
+    plt.figure(figsize=(12,6))
     plt.plot(
-        [pred_date, today],
-        [pred_price, today_close],
+        all_dates,
+        all_prices,
         "o-",
+        linewidth=2,
         label="Yesterday Forecast → Today Actual"
     )
 
-    plt.text(pred_date, pred_price, f"{pred_price:.2f}", ha="center", va="bottom")
-    plt.text(today, today_close, f"{today_close:.2f}", ha="center", va="bottom")
+    # 標註最後一點（今天）
+    plt.scatter(today, today_close, s=140, marker="*", label="Today Close")
+    plt.text(
+        today,
+        today_close + 0.3,
+        f"Actual {today_close:.2f}",
+        ha="center",
+        fontsize=10
+    )
 
-    plt.title("Backtest: Yesterday Forecast vs Today Actual")
+    plt.title("Backtest | Forecast Path vs Today Actual")
     plt.xticks(rotation=45)
     plt.grid(True)
     plt.legend()
 
     os.makedirs("results", exist_ok=True)
-    plt.savefig(f"results/{today:%Y-%m-%d}_backtest.png", dpi=300)
+    plt.savefig(
+        f"results/{today:%Y-%m-%d}_backtest.png",
+        dpi=300,
+        bbox_inches="tight"
+    )
     plt.close()
 
 # ================= Main =================
@@ -234,4 +266,4 @@ if __name__ == "__main__":
                      index=False, encoding="utf-8-sig")
 
     plot_and_save(df, future_df)
-    plot_yesterday_forecast_vs_today(df)
+    plot_backtest_from_forecast_csv(df)
