@@ -213,6 +213,7 @@ def plot_and_save(df_hist, future_df):
     plt.close()
 
 
+
 def pick_forecast_csv(results_dir="results"):
     today = pd.Timestamp(datetime.now().date())
 
@@ -221,22 +222,21 @@ def pick_forecast_csv(results_dir="results"):
         reverse=True
     )
 
-    if not csvs:
-        return None
+    for f in csvs:
+        path = os.path.join(results_dir, f)
 
-    latest = csvs[0]
-    latest_date = pd.to_datetime(latest.split("_")[0])
+        try:
+            head = pd.read_csv(path, nrows=1, parse_dates=["asof_date"])
+        except Exception:
+            continue
 
-    # ✅ 如果最新的是「今天產生的 forecast」
-    # → 代表可能還沒收盤，用上一份（昨天）
-    if latest_date == today:
-        if len(csvs) >= 2:
-            return os.path.join(results_dir, csvs[1])
-        else:
-            return None
+        asof = pd.Timestamp(head.loc[0, "asof_date"])
 
-    # 否則直接用最新那份
-    return os.path.join(results_dir, latest)
+        # ✅ 關鍵判斷：只用「基準日 < 今天」的 forecast
+        if asof < today:
+            return path
+
+    return None
 
 # ================= 回測決策分岔圖（PNG + CSV） =================
 def plot_backtest_error(df):
@@ -446,6 +446,7 @@ if __name__ == "__main__":
 
     # ✅ 預測數值輸出 CSV（隔天要疊今日實際用這份）
     os.makedirs("results", exist_ok=True)
+    future_df["asof_date"] = asof_date
     future_df.to_csv(f"results/{datetime.now():%Y-%m-%d}_forecast.csv",
                      index=False, encoding="utf-8-sig")
 
