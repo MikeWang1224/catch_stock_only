@@ -212,12 +212,31 @@ def plot_and_save(df_hist, future_df):
                 dpi=300, bbox_inches="tight")
     plt.close()
 
-# ================= 回測誤差圖（PNG + CSV） =================
-# -*- coding: utf-8 -*-
-"""
-FireBase_Attention_LSTM_Direction.py
-（中略：前面完全不動）
-"""
+
+def pick_forecast_csv(results_dir="results"):
+    today = pd.Timestamp(datetime.now().date())
+
+    csvs = sorted(
+        [f for f in os.listdir(results_dir) if f.endswith("_forecast.csv")],
+        reverse=True
+    )
+
+    if not csvs:
+        return None
+
+    latest = csvs[0]
+    latest_date = pd.to_datetime(latest.split("_")[0])
+
+    # ✅ 如果最新的是「今天產生的 forecast」
+    # → 代表可能還沒收盤，用上一份（昨天）
+    if latest_date == today:
+        if len(csvs) >= 2:
+            return os.path.join(results_dir, csvs[1])
+        else:
+            return None
+
+    # 否則直接用最新那份
+    return os.path.join(results_dir, latest)
 
 # ================= 回測決策分岔圖（PNG + CSV） =================
 def plot_backtest_error(df):
@@ -230,29 +249,18 @@ def plot_backtest_error(df):
         t → Pred(t+1)
         t → Actual(t+1)
     """
-
-    today = pd.Timestamp(datetime.now().date())
-
-    # ================= 找昨天的 forecast =================
+    # ================= 找可用的 forecast（避開今天） =================
     if not os.path.exists("results"):
-        print("⚠️ 無 results 資料夾，略過回測")
-        return
-
-    csvs = sorted(
-        [f for f in os.listdir("results") if f.endswith("_forecast.csv")],
-        reverse=True
-    )
-
-    forecast_csv = None
-    for f in csvs:
-        d = pd.to_datetime(f.split("_")[0])
-        if d < today:
-            forecast_csv = os.path.join("results", f)
-            break
-
+      print("⚠️ 無 results 資料夾，略過回測")
+      return
+    
+    forecast_csv = pick_forecast_csv("results")
+    
     if forecast_csv is None:
-        print("⚠️ 找不到昨日 forecast，略過回測")
-        return
+      print("⚠️ 無可用 forecast，略過回測")
+      return
+    
+
 
     future_df = pd.read_csv(forecast_csv, parse_dates=["date"])
 
