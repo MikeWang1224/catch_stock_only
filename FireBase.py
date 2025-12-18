@@ -317,7 +317,7 @@ def plot_backtest_error(df):
         x_t,
         close_t + price_offset,
         f"{close_t:.2f}",
-        ha="center",
+        ha="right",
         va="bottom",
         fontsize=10,
         color="black"
