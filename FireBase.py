@@ -310,15 +310,14 @@ def plot_backtest_error(df):
     )
     
     # ================= 數值標註（全部統一在點右邊） =================
-    dx = 0.08  # X 方向右移量
-    
-    # t 日 Close
+    price_offset = 0.3  # 或依股價調整，例如 0.2 ~ 0.5
+
     ax.text(
         x_t + dx,
-        close_t,
+        close_t + price_offset,
         f"{close_t:.2f}",
         ha="left",
-        va="bottom", 
+        va="bottom",
         fontsize=10,
         color="black"
     )
