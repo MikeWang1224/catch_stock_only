@@ -314,7 +314,7 @@ def plot_backtest_error(df):
     price_offset = 0.3  # 或依股價調整，例如 0.2 ~ 0.5
 
     ax.text(
-        x_t + dx,
+        x_t,
         close_t + price_offset,
         f"{close_t:.2f}",
         ha="left",
