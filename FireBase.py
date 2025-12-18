@@ -318,9 +318,11 @@ def plot_backtest_error(df):
     )
 
     # X 軸
-    labels = trend.index.strftime("%m-%d").tolist() + ["t+1"]
+    labels = trend.index.strftime("%m-%d").tolist()
+    labels.append(t1.strftime("%m-%d"))  # ✅ 實際日期
     ax.set_xticks(np.arange(len(labels)))
     ax.set_xticklabels(labels)
+
 
     ax.set_title("2301.TW Decision Backtest (t → t+1)")
     ax.legend()
