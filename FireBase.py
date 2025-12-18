@@ -317,7 +317,7 @@ def plot_backtest_error(df):
         x_t,
         close_t + price_offset, 
         f"{close_t:.2f}", 
-        ha="left", 
+        ha="center", 
         va="bottom",   
         fontsize=14, 
         color="black" 
@@ -329,7 +329,7 @@ def plot_backtest_error(df):
         f"Pred {pred_t1:.2f}",
         ha="left",
         va="center",
-        fontsize=10,
+        fontsize=14,
         color="red"
     )
     
@@ -340,7 +340,7 @@ def plot_backtest_error(df):
         f"Actual {actual_t1:.2f}",
         ha="left",
         va="center",
-        fontsize=10,
+        fontsize=14,
         color="green"
     )
     
