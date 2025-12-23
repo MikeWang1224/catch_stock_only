@@ -4,6 +4,7 @@
 ✅ 今日 Close 先覆寫，再重新計算指標（一致性修正版）
 ➕ 加入加權指數 / 電子指數（Close only）
 ➕ 加入南亞科 2408.TW（同方法：覆寫今日 Close → 重算指標 → 寫回）
+➕ 加入華東 8110.TW（同方法：覆寫今日 Close → 重算指標 → 寫回）
 不含模型、不含預測、不含繪圖
 """
 
@@ -190,9 +191,14 @@ if __name__ == "__main__":
     df_2408 = fetch_prepare_recalc("2408.TW", period=PERIOD, collection=COLLECTION)
     save_to_firestore(df_2408, "2408.TW", collection=COLLECTION)
 
+    # 8110：華東（同方法）
+    df_8110 = fetch_prepare_recalc("8110.TW", period=PERIOD, collection=COLLECTION)
+    save_to_firestore(df_8110, "8110.TW", collection=COLLECTION)
+
     # ➕ 加權指數 / 電子指數
     save_index_close("^TWII", "TAIEX", period=PERIOD, collection=COLLECTION)
     save_index_close("^TWTE", "ELECTRONICS", period=PERIOD, collection=COLLECTION)
 
     print("2301 tail:\n", df_2301.tail())
     print("2408 tail:\n", df_2408.tail())
+    print("8110 tail:\n", df_8110.tail())
