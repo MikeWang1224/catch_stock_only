@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-FireBase_Attention_LSTM_Direction.py
+FireBase_Attention_LSTM_Direction.py  (8110stock.py)
 - Attention-LSTM
 - Multi-task: Return path + Direction
 - ✅ 小資料友善版：更穩、更不容易亂噴
@@ -20,10 +20,11 @@ FireBase_Attention_LSTM_Direction.py
   - results/YYYY-MM-DD_TICKER_backtest.png
   - results/YYYY-MM-DD_TICKER_backtest.csv
 
-✅ 本版：華東 8110.TW 專屬模型 & 專屬 Firestore 讀取來源（同 collection，但 ticker key 改 8110.TW）
-- 圖表「內容」完全不動（包含 plot 畫法、Today marker 等）
-- 檔名改含 ticker
-- 模型依 ticker 分開存檔：models/{ticker}_attn_lstm.keras
+✅ 華東 8110.TW 專屬強化（照前面建議改）
+  A) Feature：加入 HL_RANGE / GAP / VOL_REL（更貼近中小型股/波動股）
+  B) Target：預測「波動標準化」log-return（用 t-1 的 RET_STD_20 做尺度，避免偷看）
+  C) 推回價格時：把預測的 normalized return 乘回 asof 的 RET_STD_20
+  D) loss_weights：direction 權重提高（方向通常比精準價更可靠）
 """
 
 import os, json
@@ -87,8 +88,10 @@ def ensure_today_row(df):
         print(f"⚠️ 今日無資料，使用 {last_date.date()} 補今日")
     return df.sort_index()
 
-# ================= Feature Engineering =================
+# ================= Feature Engineering（華東專屬） =================
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
     # ✅ Volume 尺度穩定（非常建議）
     if "Volume" in df.columns:
         df["Volume"] = np.log1p(df["Volume"].astype(float))
@@ -96,54 +99,87 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     # 圖表用均線（保持不變）
     df["SMA5"] = df["Close"].rolling(5).mean()
     df["SMA10"] = df["Close"].rolling(10).mean()
+
+    # ✅ 華東（波動/跳空/量能）特徵
+    # 需要 Firestore 有 Open/High/Low（你 catch_stock.py 寫入是有的）
+    if all(c in df.columns for c in ["Open", "High", "Low", "Close"]):
+        df["HL_RANGE"] = (df["High"].astype(float) - df["Low"].astype(float)) / df["Close"].astype(float)
+        df["GAP"] = (df["Open"].astype(float) - df["Close"].shift(1).astype(float)) / df["Close"].shift(1).astype(float)
+    else:
+        # 若缺欄位，先給 NaN（後面 dropna 會排掉）
+        df["HL_RANGE"] = np.nan
+        df["GAP"] = np.nan
+
+    # ✅ 量能相對強弱（用 log1p 之後的 Volume 去做比值即可）
+    df["VOL_REL"] = df["Volume"] / (df["Volume"].rolling(20).mean() + 1e-9)
+
+    # ✅ 20日波動（用來標準化 y）
+    close = df["Close"].astype(float)
+    df["RET_STD_20"] = np.log(close).diff().rolling(20).std()
+
     return df
 
-# ================= Sequence（避免錯位，且不亂切 df） =================
-def create_sequences(df, features, steps=5, window=40):
+# ================= Sequence（標準化 return，避免波動 regime 影響） =================
+def create_sequences(df, features, steps=5, window=40, eps=1e-9):
     """
     X: t-window ~ t-1
-    y_ret: t ~ t+steps-1 的 log return
-    y_dir: 未來 steps 天累積方向
-    idx: 每個樣本對應的「t 當天日期」（用來避免 scaler/split 座標系錯位）
+    y_ret: t ~ t+steps-1 的「normalized log return」
+           normalized = logret / (RET_STD_20 at t-1)
+           ✅ 用 t-1 的波動當尺度，避免偷看（no leakage）
+    y_dir: 未來 steps 天累積方向（用 raw logret 判斷）
+    idx: 每個樣本對應的「t 當天日期」
     """
     X, y_ret, y_dir, idx = [], [], [], []
 
     close = df["Close"].astype(float)
     logret = np.log(close).diff()
+
+    if "RET_STD_20" not in df.columns:
+        raise ValueError("⚠️ 缺少 RET_STD_20，請確認 add_features() 有被呼叫")
+
     feat = df[features].values
 
     for i in range(window, len(df) - steps):
         x_seq = feat[i - window:i]
-        future_ret = logret.iloc[i:i + steps].values
-        if np.any(np.isnan(future_ret)) or np.any(np.isnan(x_seq)):
+
+        future_ret_raw = logret.iloc[i:i + steps].values
+        if np.any(np.isnan(future_ret_raw)) or np.any(np.isnan(x_seq)):
             continue
+
+        # ✅ 用 t-1 的波動尺度（避免偷看 t 的資訊）
+        scale = df["RET_STD_20"].iloc[i - 1]
+        if pd.isna(scale) or scale < eps:
+            continue
+
+        future_ret_norm = future_ret_raw / (float(scale) + eps)
+
         X.append(x_seq)
-        y_ret.append(future_ret)
-        y_dir.append(1.0 if future_ret.sum() > 0 else 0.0)
-        idx.append(df.index[i])  # ✅ 這個樣本對應的 t 日期
+        y_ret.append(future_ret_norm)
+        y_dir.append(1.0 if future_ret_raw.sum() > 0 else 0.0)
+        idx.append(df.index[i])
 
     return np.array(X), np.array(y_ret), np.array(y_dir), np.array(idx)
 
-# ================= Attention-LSTM（✅ return 限幅） =================
-def build_attention_lstm(input_shape, steps, max_daily_logret=0.06, learning_rate=7e-4, lstm_units=64):
+# ================= Attention-LSTM（✅ return 限幅 + direction 權重提高） =================
+def build_attention_lstm(input_shape, steps, max_daily_normret=3.0, learning_rate=6e-4, lstm_units=64):
     """
-    max_daily_logret：限制單日 log-return 最大幅度，避免連乘價格爆炸
-    learning_rate：不同個股可用不同 lr
-    lstm_units：不同個股可調模型容量
+    max_daily_normret：限制「normalized」單日幅度，避免連乘爆炸
+    - 因為現在 y 是 normalized return，所以限幅應該用「倍數」而不是 0.06 這種絕對值
+    常見合理範圍：2 ~ 4
     """
     inp = Input(shape=input_shape)
 
     x = LSTM(lstm_units, return_sequences=True)(inp)
     x = Dropout(0.2)(x)
 
-    score = Dense(1, name="attn_score")(x)                 # (batch, time, 1)
-    weights = Softmax(axis=1, name="attn_weights")(score)  # softmax over time
+    score = Dense(1, name="attn_score")(x)
+    weights = Softmax(axis=1, name="attn_weights")(score)
     context = Lambda(lambda t: tf.reduce_sum(t[0] * t[1], axis=1),
-                     name="attn_context")([x, weights])    # (batch, hidden)
+                     name="attn_context")([x, weights])
 
-    # ✅ return head：tanh 限幅（結構性保證不會爆）
-    raw = Dense(steps, activation="tanh")(context)          # [-1, 1]
-    out_ret = Lambda(lambda t: t * max_daily_logret, name="return")(raw)
+    # ✅ return head：tanh 限幅（normalized return）
+    raw = Dense(steps, activation="tanh")(context)           # [-1, 1]
+    out_ret = Lambda(lambda t: t * max_daily_normret, name="return")(raw)
 
     out_dir = Dense(1, activation="sigmoid", name="direction")(context)
 
@@ -154,13 +190,16 @@ def build_attention_lstm(input_shape, steps, max_daily_logret=0.06, learning_rat
             "return": tf.keras.losses.Huber(),
             "direction": "binary_crossentropy"
         },
+        # ✅ 華東：方向更重要一些
         loss_weights={
             "return": 1.0,
-            "direction": 0.4
+            "direction": 0.8
         },
         metrics={
-            "direction": [tf.keras.metrics.BinaryAccuracy(name="acc"),
-                          tf.keras.metrics.AUC(name="auc")]
+            "direction": [
+                tf.keras.metrics.BinaryAccuracy(name="acc"),
+                tf.keras.metrics.AUC(name="auc")
+            ]
         }
     )
     return model
@@ -225,33 +264,25 @@ def plot_and_save(df_hist, future_df, ticker: str):
 def plot_backtest_error(df, ticker: str):
     """
     決策式回測圖（Decision-based Backtest）
-
-    特性：
     - 自動排除今天的 forecast
     - 使用最近一筆歷史 forecast（同 ticker）
-    - 不受 ensure_today_row() 假資料影響
-    - 不怕週末 / 停市
-    - 圖中加入 run timestamp，確保 Git 每次都會更新 PNG
     """
 
     today = pd.Timestamp(datetime.now().date())
 
-    # ================= 找最近一次（排除今天）的 forecast（且同 ticker） =================
     if not os.path.exists("results"):
         print("⚠️ 無 results 資料夾，略過回測")
         return
 
     forecast_files = []
     for f in os.listdir("results"):
-        # 只接受：YYYY-MM-DD_TICKER_forecast.csv
         if not f.endswith(f"_{ticker}_forecast.csv"):
             continue
         try:
             d = pd.to_datetime(f.split("_")[0])
         except Exception:
             continue
-
-        if d < today:  # 明確排除今天
+        if d < today:
             forecast_files.append((d, f))
 
     if not forecast_files:
@@ -266,9 +297,7 @@ def plot_backtest_error(df, ticker: str):
 
     future_df = pd.read_csv(forecast_csv, parse_dates=["date"])
 
-    # ================= 決策日 t（最後一個真實交易日） =================
     valid_days = df.index[df.index < today]
-
     if len(valid_days) < 2:
         print("⚠️ 無足夠歷史交易日，略過回測")
         return
@@ -276,7 +305,6 @@ def plot_backtest_error(df, ticker: str):
     t = valid_days[-1]
     t1 = t + BDay(1)
 
-    # ================= 價格 =================
     close_t = float(df.loc[t, "Close"])
     pred_t1 = float(future_df.loc[0, "Pred_Close"])
 
@@ -285,17 +313,14 @@ def plot_backtest_error(df, ticker: str):
     else:
         actual_t1 = float(df["Close"].iloc[-1])
 
-    # ================= 趨勢背景（三天） =================
     trend = df.loc[:t].tail(4)
     x_trend = np.arange(len(trend))
     x_t = x_trend[-1]
 
-    # ================= 畫圖（內容不動） =================
     plt.figure(figsize=(14, 6))
     ax = plt.gca()
 
     ax.plot(x_trend, trend["Close"], "k-o", label="Recent Close")
-
     ax.plot([x_t, x_t + 1], [close_t, pred_t1], "r--o", linewidth=2.5, label="Pred (t → t+1)")
     ax.plot([x_t, x_t + 1], [close_t, actual_t1], "g-o", linewidth=2.5, label="Actual (t → t+1)")
 
@@ -345,16 +370,15 @@ def plot_backtest_error(df, ticker: str):
 
 # ================= Main =================
 if __name__ == "__main__":
-    # ✅ 華東：專屬 ticker / 專屬模型（圖內容不動）
     TICKER = "8110.TW"
     COLLECTION = "NEW_stock_data_liteon"
 
+    # ✅ 華東專屬設定（normalized return 版本）
     STOCK_CONFIG = {
-        # 華東通常波動較大一些 → 放寬 return 限幅；同時用稍微小一點 lr，穩一點
         "8110.TW": {
             "LOOKBACK": 40,
             "STEPS": 5,
-            "MAX_DAILY_LOGRET": 0.08,
+            "MAX_DAILY_NORMRET": 3.0,  # normalized return 限幅（2~4 常見）
             "LR": 6e-4,
             "LSTM_UNITS": 64
         },
@@ -363,8 +387,8 @@ if __name__ == "__main__":
     cfg = STOCK_CONFIG.get(TICKER, {
         "LOOKBACK": 40,
         "STEPS": 5,
-        "MAX_DAILY_LOGRET": 0.06,
-        "LR": 7e-4,
+        "MAX_DAILY_NORMRET": 3.0,
+        "LR": 6e-4,
         "LSTM_UNITS": 64
     })
 
@@ -379,11 +403,23 @@ if __name__ == "__main__":
     df = ensure_today_row(df)
     df = add_features(df)
 
-    FEATURES = ["Close", "Volume", "RSI", "MACD", "K", "D", "ATR_14"]
+    # ✅ 華東專屬特徵（含 OHLC + 波動/跳空/量能）
+    FEATURES = [
+        "Close", "Open", "High", "Low",
+        "Volume", "RSI", "MACD", "K", "D", "ATR_14",
+        "HL_RANGE", "GAP", "VOL_REL"
+    ]
 
     missing = [c for c in FEATURES if c not in df.columns]
     if missing:
-        raise ValueError(f"⚠️ Firestore 資料缺欄位：{missing}\n請確認你寫回 Firestore 時有存這些指標欄位。")
+        raise ValueError(
+            f"⚠️ Firestore 資料缺欄位：{missing}\n"
+            f"請確認 catch_stock.py 寫回 8110.TW 時包含 Open/High/Low/Close/Volume，且指標欄位已寫入。"
+        )
+
+    # RET_STD_20 是 y 的尺度，需要一起存在（add_features 會做）
+    if "RET_STD_20" not in df.columns:
+        raise ValueError("⚠️ 缺少 RET_STD_20，請確認 add_features() 有被呼叫")
 
     df = df.dropna()
 
@@ -425,7 +461,7 @@ if __name__ == "__main__":
         model = build_attention_lstm(
             (LOOKBACK, len(FEATURES)),
             STEPS,
-            max_daily_logret=cfg["MAX_DAILY_LOGRET"],
+            max_daily_normret=cfg["MAX_DAILY_NORMRET"],
             learning_rate=cfg["LR"],
             lstm_units=cfg["LSTM_UNITS"]
         )
@@ -443,16 +479,24 @@ if __name__ == "__main__":
     print(f"💾 已儲存模型：{MODEL_PATH}")
 
     pred_ret, pred_dir = model.predict(X_te_s, verbose=0)
-    raw_returns = pred_ret[-1]
+    raw_norm_returns = pred_ret[-1]  # ✅ normalized returns（已限幅）
 
     print(f"📈 預測方向機率（看漲）: {pred_dir[-1][0]:.2%}")
 
     asof_date = df.index.max()
     last_close = float(df.loc[asof_date, "Close"])
 
+    # ✅ 把 normalized return 乘回波動尺度（用 asof 的 RET_STD_20）
+    scale_last = float(df.loc[asof_date, "RET_STD_20"])
+    if not np.isfinite(scale_last) or scale_last <= 0:
+        # fallback：用最近 20 天 std 估
+        scale_last = float(np.log(df["Close"].astype(float)).diff().rolling(20).std().iloc[-1])
+    scale_last = max(scale_last, 1e-6)
+
     prices = []
     price = last_close
-    for r in raw_returns:
+    for r_norm in raw_norm_returns:
+        r = float(r_norm) * scale_last
         price *= np.exp(r)
         prices.append(price)
 
