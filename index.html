@@ -1,253 +1,215 @@
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>每日圖片</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>每日模型圖表</title>
+
   <style>
     body {
       margin: 0;
-      padding: 12px;
-      background-color: #000;
+      padding: 14px;
+      background: #000;
       color: #fff;
-      text-align: center;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto;
     }
 
     h1 {
-      font-size: 18px;
-      margin-bottom: 12px;
+      font-size: 20px;
+      margin-bottom: 6px;
+      text-align: center;
     }
 
     .hint {
+      text-align: center;
       font-size: 14px;
       color: #aaa;
-      margin-bottom: 16px;
+      margin-bottom: 20px;
     }
 
-    /* 圖片區塊 */
-    .section {
+    .stock-block {
       max-width: 900px;
-      margin: 0 auto 32px auto;
-      display: none;
+      margin: 0 auto 44px auto;
+      padding-left: 14px;
+      border-left: 4px solid #444;
     }
 
-    /* 圖片上方的大字 */
-    .section-title {
-      font-size: 18px;
-      font-weight: 700;
-      margin-bottom: 12px;
-      line-height: 1.4;
-    }
-
-    /* 第二段再更大 */
-    .section-title.big {
+    .stock-header {
       font-size: 20px;
+      font-weight: 800;
+      margin-bottom: 6px;
+    }
+
+    .stock-subhint {
+      font-size: 13px;
+      color: #aaa;
+      margin-bottom: 10px;
+    }
+
+    /* === 模型結論摘要 === */
+    .model-summary {
+      font-size: 15px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .up { color: #4CAF50; }
+    .down { color: #F44336; }
+    .neutral { color: #FFC107; }
+
+    /* === 信心條 === */
+    .confidence-bar {
+      height: 6px;
+      background: #333;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-bottom: 14px;
+    }
+
+    .confidence-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #FFC107, #4CAF50);
+    }
+
+    .section {
+      margin-bottom: 28px;
+    }
+
+    .section-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin-bottom: 10px;
+    }
+
+    .section-title.big {
+      font-size: 18px;
     }
 
     img {
       width: 100%;
       border-radius: 6px;
       display: block;
-    }
-
-    /* ✅ 多股票區塊樣式（新增） */
-    .stock-block {
-      max-width: 900px;
-      margin: 0 auto 42px auto;
-      padding-top: 8px;
-      border-top: 1px solid rgba(255,255,255,0.12);
-    }
-
-    .stock-header {
-      margin: 10px 0 10px 0;
-      font-size: 18px;
-      font-weight: 800;
-      line-height: 1.35;
-    }
-
-    .stock-subhint {
-      font-size: 14px;
-      color: #aaa;
-      margin-bottom: 12px;
+      filter: contrast(1.05) saturate(1.05);
     }
 
     @media (min-width: 768px) {
-      .section-title {
-        font-size: 32px;
-      }
-      .section-title.big {
-        font-size: 40px;
-      }
-      .stock-header {
-        font-size: 26px;
-      }
+      .stock-header { font-size: 26px; }
+      .section-title { font-size: 28px; }
+      .section-title.big { font-size: 34px; }
     }
   </style>
 </head>
+
 <body>
 
-  <h1 id="title">載入中…</h1>
-  <div class="hint" id="hint"></div>
+<h1>每日模型圖表</h1>
+<div class="hint">綠＝偏多｜紅＝偏空｜黃＝盤整</div>
 
-  <!-- ✅ 多股票容器（新增） -->
-  <div id="container"></div>
+<div id="container"></div>
 
-  <script>
-    const MAX_LOOKBACK_DAYS = 10;
-    const IMG_FOLDER = "results";
+<script>
+  const IMG_FOLDER = "results";
+  const MAX_LOOKBACK_DAYS = 10;
 
-    // ✅ 三支股票都用 ticker 檔名：
-    // YYYY-MM-DD_<TICKER>_pred.png / backtest.png
-    const STOCKS = [
-      { ticker: "2301.TW", name: "光寶科", fileMode: "ticker" },
-      { ticker: "2408.TW", name: "南亞科", fileMode: "ticker" },
-      { ticker: "8110.TW", name: "華東",   fileMode: "ticker" }
-    ];
+  /* 🔧 你之後可以把這段改成 API / JSON */
+  function mockModelOutput(ticker) {
+    const rnd = Math.random();
+    const dir1 = 0.45 + rnd * 0.3;
+    const dirN = 0.45 + Math.random() * 0.3;
+    return {
+      dir1,
+      dirN
+    };
+  }
 
-    function getTWDate(baseDate = new Date()) {
-      const tw = new Date(
-        baseDate.toLocaleString("en-US", { timeZone: "Asia/Taipei" })
-      );
-      const yyyy = tw.getFullYear();
-      const mm = String(tw.getMonth() + 1).padStart(2, "0");
-      const dd = String(tw.getDate()).padStart(2, "0");
-      return `${yyyy}-${mm}-${dd}`;
-    }
+  const STOCKS = [
+    { ticker: "2301.TW", name: "光寶科" },
+    { ticker: "2408.TW", name: "南亞科" },
+    { ticker: "8110.TW", name: "華東" }
+  ];
 
-    function loadImageIfExists(src) {
-      return new Promise((resolve) => {
-        const img = new Image();
-        img.onload = () => resolve(true);
-        img.onerror = () => resolve(false);
-        img.src = src + "?t=" + Date.now();
-      });
-    }
+  function getTWDate(d = new Date()) {
+    const tw = new Date(d.toLocaleString("en-US", { timeZone: "Asia/Taipei" }));
+    return `${tw.getFullYear()}-${String(tw.getMonth()+1).padStart(2,"0")}-${String(tw.getDate()).padStart(2,"0")}`;
+  }
 
-    function buildPaths(dateStr, stock) {
-      const { ticker, fileMode } = stock;
+  function loadImage(src) {
+    return new Promise(res => {
+      const img = new Image();
+      img.onload = () => res(true);
+      img.onerror = () => res(false);
+      img.src = src + "?t=" + Date.now();
+    });
+  }
 
-      if (fileMode === "plain") {
-        return {
-          pred: `${IMG_FOLDER}/${dateStr}_pred.png`,
-          backtest: `${IMG_FOLDER}/${dateStr}_backtest.png`
-        };
+  async function findLatest(stock) {
+    for (let i=0;i<=MAX_LOOKBACK_DAYS;i++) {
+      const d = new Date();
+      d.setDate(d.getDate()-i);
+      const ds = getTWDate(d);
+      const pred = `${IMG_FOLDER}/${ds}_${stock.ticker}_pred.png`;
+      const back = `${IMG_FOLDER}/${ds}_${stock.ticker}_backtest.png`;
+      if (await loadImage(pred)) {
+        return { date: ds, offset:i, pred, back, backOK: await loadImage(back) };
       }
-
-      return {
-        pred: `${IMG_FOLDER}/${dateStr}_${ticker}_pred.png`,
-        backtest: `${IMG_FOLDER}/${dateStr}_${ticker}_backtest.png`
-      };
     }
+    return null;
+  }
 
-    // 找最近日期：只要 pred 存在就算成功；backtest 有就加顯示
-    async function findLatestForStock(stock) {
-      for (let i = 0; i <= MAX_LOOKBACK_DAYS; i++) {
-        const d = new Date();
-        d.setDate(d.getDate() - i);
-        const dateStr = getTWDate(d);
+  function classify(p) {
+    if (p > 0.55) return ["up", "📈 偏多"];
+    if (p < 0.45) return ["down", "📉 偏空"];
+    return ["neutral", "⚠️ 盤整"];
+  }
 
-        const { pred, backtest } = buildPaths(dateStr, stock);
+  async function main() {
+    const c = document.getElementById("container");
 
-        const predOK = await loadImageIfExists(pred);
-        if (!predOK) continue;
+    for (const s of STOCKS) {
+      const found = await findLatest(s);
+      if (!found) continue;
 
-        const backtestOK = await loadImageIfExists(backtest);
-
-        return {
-          dateStr,
-          offsetDays: i,
-          predSrc: pred,
-          backtestSrc: backtest,
-          backtestOK
-        };
-      }
-      return null;
-    }
-
-    function createStockBlock(stock, found) {
-      const { name, ticker } = stock;
+      const m = mockModelOutput(s.ticker);
+      const [c1, t1] = classify(m.dir1);
+      const [c2, t2] = classify(m.dirN);
+      const conf = Math.round(Math.max(m.dir1, m.dirN) * 100);
 
       const block = document.createElement("div");
       block.className = "stock-block";
+      block.style.borderLeftColor =
+        c1==="up" ? "#4CAF50" : c1==="down" ? "#F44336" : "#FFC107";
 
-      const header = document.createElement("div");
-      header.className = "stock-header";
-      header.textContent = `${name}（${ticker}）｜圖表日期：${found.dateStr}`;
-      block.appendChild(header);
+      block.innerHTML = `
+        <div class="stock-header">${s.name}（${s.ticker}）｜${found.date}</div>
+        <div class="stock-subhint">${found.offset===0?"（今日）":`（往前 ${found.offset} 天）`}</div>
 
-      const subhint = document.createElement("div");
-      subhint.className = "stock-subhint";
-      subhint.textContent =
-        found.offsetDays === 0 ? "（今日）" : `（往前第 ${found.offsetDays} 天）`;
-      block.appendChild(subhint);
+        <div class="model-summary ${c1}">
+          ${t1}（明日 ${(m.dir1*100).toFixed(0)}%）｜
+          ${t2}（趨勢 ${(m.dirN*100).toFixed(0)}%）
+        </div>
 
-      // --- Pred section（一定顯示） ---
-      const predSection = document.createElement("div");
-      predSection.className = "section";
-      predSection.style.display = "block";
+        <div class="confidence-bar">
+          <div class="confidence-fill" style="width:${conf}%"></div>
+        </div>
 
-      const predTitle = document.createElement("div");
-      predTitle.className = "section-title";
-      predTitle.textContent = "收盤價、五日線（綠線）、十日線（藍線）";
-      predSection.appendChild(predTitle);
+        <div class="section">
+          <div class="section-title">收盤價＋均線＋模型預測</div>
+          <img src="${found.pred}">
+        </div>
 
-      const predImg = document.createElement("img");
-      predImg.alt = `${ticker} Prediction`;
-      predImg.src = found.predSrc;
-      predSection.appendChild(predImg);
+        ${found.backOK ? `
+        <div class="section">
+          <div class="section-title big">昨日預測 → 今日實際</div>
+          <img src="${found.back}">
+        </div>` : ""}
+      `;
 
-      block.appendChild(predSection);
-
-      // --- Backtest section（有才顯示） ---
-      if (found.backtestOK) {
-        const backtestSection = document.createElement("div");
-        backtestSection.className = "section";
-        backtestSection.style.display = "block";
-
-        const backtestTitle = document.createElement("div");
-        backtestTitle.className = "section-title big";
-        backtestTitle.textContent = "結果回推（預測準不準）";
-        backtestSection.appendChild(backtestTitle);
-
-        const backtestImg = document.createElement("img");
-        backtestImg.alt = `${ticker} Backtest`;
-        backtestImg.src = found.backtestSrc;
-        backtestSection.appendChild(backtestImg);
-
-        block.appendChild(backtestSection);
-      }
-
-      return block;
+      c.appendChild(block);
     }
+  }
 
-    async function main() {
-      document.getElementById("title").innerText = "每日圖表";
-      document.getElementById("hint").innerText =
-        "每支股票若缺回測圖，會只顯示預測圖";
-
-      const container = document.getElementById("container");
-      container.innerHTML = "";
-
-      let shownCount = 0;
-
-      for (const stock of STOCKS) {
-        const found = await findLatestForStock(stock);
-        if (!found) continue;
-        container.appendChild(createStockBlock(stock, found));
-        shownCount += 1;
-      }
-
-      if (shownCount === 0) {
-        document.getElementById("title").innerText = "找不到可用圖表";
-        document.getElementById("hint").innerText =
-          `最近 ${MAX_LOOKBACK_DAYS} 天內沒有任何「預測圖」`;
-      }
-    }
-
-    main();
-  </script>
+  main();
+</script>
 
 </body>
 </html>
-<!-- BUILD_TIME Tue Dec 23 10:25:41 UTC 2025 -->
