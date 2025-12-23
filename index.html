@@ -97,14 +97,12 @@
     const MAX_LOOKBACK_DAYS = 10;
     const IMG_FOLDER = "results";
 
-    // ✅ 三支股票：光寶（無代碼檔名）+ 南亞科/華東（有代碼檔名）
-    // fileMode:
-    // - "plain": YYYY-MM-DD_pred.png
-    // - "ticker": YYYY-MM-DD_<TICKER>_pred.png
+    // ✅ 三支股票都用 ticker 檔名：
+    // YYYY-MM-DD_<TICKER>_pred.png / backtest.png
     const STOCKS = [
-      { ticker: "2301.TW", name: "光寶科", fileMode: "plain" },
+      { ticker: "2301.TW", name: "光寶科", fileMode: "ticker" },
       { ticker: "2408.TW", name: "南亞科", fileMode: "ticker" },
-      { ticker: "8110.TW", name: "華東",   fileMode: "ticker" }   // ✅ 新增
+      { ticker: "8110.TW", name: "華東",   fileMode: "ticker" }
     ];
 
     function getTWDate(baseDate = new Date()) {
