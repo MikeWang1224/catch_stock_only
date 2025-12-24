@@ -252,3 +252,59 @@ if __name__ == "__main__":
     half_monthly.to_csv(monthly_csv, index=False, encoding="utf-8-sig")
 
     print("✅ 半年預測（日 / 月）完成")
+
+    # ================= 🆕 半年預測月線圖 =================
+    import matplotlib.dates as mdates
+
+    hist_monthly = (
+        df[["Close"]]
+        .reset_index()
+        .rename(columns={"index": "date"})
+        .set_index("date")
+        .resample("M")
+        .last()
+        .reset_index()
+    ).tail(12)
+
+    pred_monthly = half_monthly.copy()
+
+    plt.figure(figsize=(10, 5))
+
+    plt.plot(
+        hist_monthly["date"],
+        hist_monthly["Close"],
+        label="Actual (Monthly)",
+        linewidth=2
+    )
+
+    plt.plot(
+        pred_monthly["date"],
+        pred_monthly["Pred_Close"],
+        label="Forecast (6M)",
+        linestyle="--",
+        linewidth=2
+    )
+
+    plt.axvline(
+        hist_monthly["date"].iloc[-1],
+        color="gray",
+        linestyle=":",
+        alpha=0.7
+    )
+
+    plt.title(f"{TICKER} Monthly Price: Actual vs 6M Forecast")
+    plt.xlabel("Month")
+    plt.ylabel("Price")
+    plt.legend()
+    plt.grid(alpha=0.3)
+
+    plt.gca().xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m"))
+    plt.gca().xaxis.set_major_locator(mdates.MonthLocator())
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    fig_path = f"results/{datetime.now():%Y-%m-%d}_{TICKER}_6M_forecast_monthly.png"
+    plt.savefig(fig_path, dpi=150)
+    plt.close()
+
+    print(f"📈 半年預測月線圖完成：{fig_path}")
