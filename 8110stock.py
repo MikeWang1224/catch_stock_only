@@ -373,7 +373,6 @@ def plot_backtest_error(df, ticker: str):
 
 
 # ================= 6M Trend Forecast（只新增，不影響原流程） =================
-# ================= 6M Trend Index Forecast（✅ 正確長期版本） =================
 def forecast_6m_trend_index(
     model,
     df,
@@ -385,9 +384,10 @@ def forecast_6m_trend_index(
     months=6
 ):
     """
-    6 個月「趨勢指數」預測（不產生價格）
-    x 軸：月
-    y 軸：Trend Index = mean(direction_prob) - 0.5
+    ✅ 真正的 6 個月趨勢預測（Regime Forecast）
+    - 用 pred_ret 推 Close
+    - 狀態會隨時間演化
+    - 輸出月頻 Trend Index（非價格）
     """
 
     total_days = int(months * 21)
@@ -396,37 +396,59 @@ def forecast_6m_trend_index(
     dates = []
     trend_vals = []
 
-    i = 0
-    while i < total_days:
+    for _ in range(total_days):
+
+        # ===== 取最後一個 window =====
         window_df = df_ext.iloc[-lookback:].copy()
 
-        X_win = window_df[features].values
-        X_win = scaler.transform(X_win).reshape(1, lookback, len(features))
+        X_win = scaler.transform(
+            window_df[features].values
+        ).reshape(1, lookback, len(features))
 
-        # 🔑 只用 direction head
+        # ===== 模型預測 =====
         pred_ret, dir_prob = model.predict(X_win, verbose=0)
 
         p = float(dir_prob[0][0])
-        energy = float(np.mean(np.abs(pred_ret[0])))   # normalized return 能量
-        
+        energy = float(np.mean(np.abs(pred_ret[0])))
+
         trend_vals.append((p - 0.5) * energy)
+
+        # ===== 用預測 return 推進市場 =====
+        last_row = df_ext.iloc[-1]
+        last_close = float(last_row["Close"])
+
+        # 用第 1 天 normalized return
+        r_norm = float(pred_ret[0][0])
+        scale = float(last_row["RET_STD_20"])
+        scale = max(scale, 1e-6)
+
+        r = r_norm * scale
+        next_close = last_close * np.exp(r)
 
         next_date = df_ext.index[-1] + BDay(1)
         dates.append(next_date)
 
-        # fake row（只為了往前推時間）
-        new_row = df_ext.iloc[-1].copy()
+        # ===== 建立新的 OHLC（簡化但一致）=====
+        new_row = last_row.copy()
+        new_row["Open"] = last_close
+        new_row["Close"] = next_close
+        new_row["High"] = max(last_close, next_close)
+        new_row["Low"]  = min(last_close, next_close)
+
         new_row.name = next_date
         df_ext = pd.concat([df_ext, new_row.to_frame().T])
 
-        i += 1
+        # ===== 🔑 重算特徵（非常重要）=====
+        df_ext = add_features(df_ext)
+        df_ext = df_ext.dropna()
 
+    # ===== 組 Trend DataFrame =====
     trend_df = pd.DataFrame({
         "date": dates,
         "Trend_Index": trend_vals
     })
 
-    # ===== 轉成月資料 =====
+    # ===== 轉成月頻 =====
     trend_df["month"] = trend_df["date"].dt.to_period("M").dt.to_timestamp()
     monthly = trend_df.groupby("month")["Trend_Index"].mean().reset_index()
 
@@ -443,9 +465,8 @@ def forecast_6m_trend_index(
         marker="o",
         linewidth=2
     )
-
     plt.axhline(0, color="gray", linestyle="--", alpha=0.6)
-    plt.title(f"{ticker} 6-Month Trend Index")
+    plt.title(f"{ticker} 6-Month Trend Index (Regime Forecast)")
     plt.xlabel("Month")
     plt.ylabel("Trend Index ( >0 Bullish , <0 Bearish )")
     plt.grid(alpha=0.3)
@@ -455,9 +476,7 @@ def forecast_6m_trend_index(
     plt.savefig(out_png, dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"📊 已輸出 6M 趨勢指數圖：{out_png}")
-
-
+    print(f"📊 已輸出【真・6M 趨勢預測】：{out_png}")
 
 # ================= Main =================
 if __name__ == "__main__":
