@@ -4,6 +4,7 @@
 ✅ 今日 Close 先覆寫，再重新計算指標（一致性修正版）
 ✅ 改1：個股只寫最近 N 天（預設 3 天）
 ✅ 改2：指數 / 外生因子只寫最新一天
+✅ 改3：自動判斷是否為交易日，非交易日改用最近交易日
 不含模型、不含預測、不含繪圖
 """
 
@@ -17,7 +18,7 @@ import numpy as np
 from datetime import datetime
 
 # ================== 參數 ==================
-WRITE_DAYS = 3   # ← 改 1：個股只寫最近 N 天
+WRITE_DAYS = 3
 COLLECTION = "NEW_stock_data_liteon"
 PERIOD = "12mo"
 
@@ -34,6 +35,18 @@ if key_dict:
     db = firestore.client()
 else:
     print("⚠️ FIREBASE 未設定，Firestore 寫入將略過")
+
+# ================= 交易日工具 =================
+def get_last_trading_day(df: pd.DataFrame):
+    """
+    回傳 (last_trading_day: Timestamp, is_today_trading: bool)
+    """
+    if df is None or len(df) == 0:
+        return None, False
+
+    last_day = df.index[-1].normalize()
+    today = pd.Timestamp(datetime.now().date())
+    return last_day, last_day == today
 
 # ================= 技術指標 =================
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -70,26 +83,30 @@ def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
     return df.dropna()
 
-# ================= 覆寫今日 Close =================
-def overwrite_today_close(df, ticker):
-    if db is None:
+# ================= 覆寫最近交易日 Close =================
+def overwrite_last_close(df, ticker):
+    if db is None or df is None or len(df) == 0:
         return df
 
-    today = datetime.now().strftime("%Y-%m-%d")
-    doc = db.collection(COLLECTION).document(today).get()
+    last_day, is_today_trading = get_last_trading_day(df)
+    date_str = last_day.strftime("%Y-%m-%d")
+
+    if not is_today_trading:
+        print(f"ℹ️ 今日非交易日，{ticker} 改用最近交易日 {date_str}")
+
+    doc = db.collection(COLLECTION).document(date_str).get()
     if doc.exists:
         payload = doc.to_dict().get(ticker, {})
         if "Close" in payload:
-            ts = pd.Timestamp(today)
-            if ts in df.index:
-                df.loc[ts, "Close"] = float(payload["Close"])
-                print(f"✔ 覆寫今日 Close {ticker}: {payload['Close']}")
+            df.loc[last_day, "Close"] = float(payload["Close"])
+            print(f"✔ 覆寫 {ticker} Close ({date_str}): {payload['Close']}")
+
     return df
 
 # ================= 個股流程 =================
 def fetch_prepare_recalc(ticker):
     df = yf.Ticker(ticker).history(period=PERIOD)
-    df = overwrite_today_close(df, ticker)
+    df = overwrite_last_close(df, ticker)
     return add_all_indicators(df)
 
 def save_stock_recent_days(df, ticker):
@@ -119,7 +136,7 @@ def save_stock_recent_days(df, ticker):
     batch.commit()
     print(f"🔥 {ticker} 寫入最近 {len(df_tail)} 天")
 
-# ================= 指數 / 外生因子（只寫最新一天） =================
+# ================= 指數 / 外生因子（只寫最近交易日） =================
 def save_factor_latest(tickers, alias):
     if db is None:
         return
@@ -129,8 +146,13 @@ def save_factor_latest(tickers, alias):
             df = yf.Ticker(tk).history(period=PERIOD)
             if len(df) == 0:
                 continue
-            row = df.iloc[-1]
-            date_str = df.index[-1].strftime("%Y-%m-%d")
+
+            last_day, is_today_trading = get_last_trading_day(df)
+            row = df.loc[last_day]
+            date_str = last_day.strftime("%Y-%m-%d")
+
+            if not is_today_trading:
+                print(f"ℹ️ 今日非交易日，{alias} 使用 {date_str}")
 
             db.collection(COLLECTION).document(date_str).set({
                 alias: {"Close": float(row["Close"])}
@@ -138,6 +160,7 @@ def save_factor_latest(tickers, alias):
 
             print(f"🔥 {alias} 更新成功（來源 {tk}）")
             return
+
         except Exception:
             continue
 
