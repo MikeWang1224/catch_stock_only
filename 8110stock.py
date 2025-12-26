@@ -497,8 +497,9 @@ def plot_6m_trend_advanced(
         cycle_main = base_amp * np.sin(phase_p)
         cycle_pull = 0.6 * base_amp * np.sin(phase_v + np.pi)
 
-        price = trend[m - 1] * (1 + cycle_main + cycle_pull)
+        price = float(trend[m - 1] * (1 + cycle_main + cycle_pull))
         prices.append(price)
+
 
     prices = np.array(prices)
 
