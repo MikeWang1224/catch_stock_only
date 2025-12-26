@@ -1,6 +1,3 @@
-#8110stock
-
-
 # -*- coding: utf-8 -*-
 """
 FireBase_Attention_LSTM_Direction.py  (8110stock.py)
@@ -120,7 +117,16 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     close = df["Close"].astype(float)
     df["RET_STD_20"] = np.log(close).diff().rolling(20).std()
 
+    # 🔧 ADD: Regime / 波段狀態特徵（不存 Firebase）
+    ma60 = df["Close"].rolling(60)
+    df["TREND_60"] = (df["Close"] - ma60.mean()) / (ma60.std() + 1e-9)
+    
+    df["TREND_SLOPE_20"] = (
+        df["Close"].rolling(20).mean().diff()
+    ) / df["Close"]
+    
     return df
+
 
 # ================= Sequence（標準化 return，避免波動 regime 影響） =================
 def create_sequences(df, features, steps=5, window=40, eps=1e-9):
@@ -371,112 +377,183 @@ def plot_backtest_error(df, ticker: str):
     out_csv = f"results/{today:%Y-%m-%d}_{ticker}_backtest.csv"
     bt.to_csv(out_csv, index=False, encoding="utf-8-sig")
 
-
-# ================= 6M Trend Forecast（只新增，不影響原流程） =================
-def forecast_6m_trend_index(
-    model,
-    df,
-    features,
-    scaler,
-    lookback,
-    steps,
-    ticker,
-    months=6
+# ================= 6M Trend Plot（x 軸 = 月） =================
+def plot_6m_trend_advanced(
+    df: pd.DataFrame,
+    last_close: float,
+    raw_norm_returns: np.ndarray,
+    scale_last: float,
+    ticker: str,
+    asof_date: pd.Timestamp
 ):
-    """
-    ✅ 真正的 6 個月趨勢預測（Regime Forecast）
-    - 用 pred_ret 推 Close
-    - 狀態會隨時間演化
-    - 輸出月頻 Trend Index（非價格）
-    """
+    MONTHS = 6
+    DPM = 21
 
-    total_days = int(months * 21)
+    # =============================
+    # 1️⃣ 主升趨勢（模型）
+    # =============================
+    # =============================
+# 1️⃣ 主升趨勢（低頻，來自歷史價格）
+# =============================
+# 用近 120 個交易日估計「長期 drift」
+    log_price = np.log(df["Close"].astype(float))
+    ret_ewm = log_price.diff().ewm(span=60).mean()
+    
+    daily_drift = float(ret_ewm.iloc[-1])
+    daily_drift = np.clip(daily_drift, -0.01, 0.01)  # 防爆（±1% / day）
 
-    df_ext = df.copy()
-    dates = []
-    trend_vals = []
 
-    for _ in range(total_days):
+    # ===== Regime 判斷（Priority 1）=====
+    atr = last_valid_value(df, "ATR_14", lookback=40)
+    rsi = last_valid_value(df, "RSI", lookback=40)
+    
+    # 波動強度（相對價格）
+    vol_regime = atr / last_close if atr else 0.03
+    
+    # 趨勢可信度分數（0~1）
+    trend_score = 1.0
+    
+    # 1️⃣ 高檔過熱 → drift 不可信
+    if rsi and rsi > 75:
+        trend_score *= 0.3
+    elif rsi and rsi > 65:
+        trend_score *= 0.6
+    
+    # 2️⃣ 超低波動 → 偏盤整
+    if vol_regime < 0.015:
+        trend_score *= 0.5
+    
+    # 3️⃣ 超高波動 → regime 不穩
+    if vol_regime > 0.08:
+        trend_score *= 0.7
+    
+    # 最終調整 drift
+    daily_drift *= trend_score
 
-        # ===== 取最後一個 window =====
-        window_df = df_ext.iloc[-lookback:].copy()
+      
+    monthly_logret = daily_drift * DPM
+    
+    trend = []
+    p = last_close
+    for _ in range(MONTHS):
+        p *= np.exp(monthly_logret)
+        trend.append(p)
+    
+    trend = np.array(trend)
+    
 
-        X_win = scaler.transform(
-            window_df[features].values
-        ).reshape(1, lookback, len(features))
 
-        # ===== 模型預測 =====
-        pred_ret, dir_prob = model.predict(X_win, verbose=0)
+    # =============================
+    # 2️⃣ 主週期（價格）
+    # =============================
+    close = df["Close"].iloc[-180:].values
+    close = close - close.mean()
 
-        p = float(dir_prob[0][0])
-        energy = float(np.mean(np.abs(pred_ret[0])))
+    fft_p = np.fft.rfft(close)
+    freq_p = np.fft.rfftfreq(len(close), d=1)
+    idx_p = np.argmax(np.abs(fft_p[1:])) + 1
+    cycle_p = np.clip(int(round(1 / freq_p[idx_p])), 40, 120)
 
-        trend_vals.append((p - 0.5) * energy)
+    # =============================
+# 3️⃣ 回檔週期（成交量）
+# =============================
+    vol_series = df["Volume"].iloc[-180:].dropna().values
+    
+    if len(vol_series) < 60:
+        cycle_v = 30  # fallback
+    else:
+        vol_centered = vol_series - vol_series.mean()
+    
+        fft_v = np.fft.rfft(vol_centered)
+        freq_v = np.fft.rfftfreq(len(vol_centered), d=1)
+        idx_v = np.argmax(np.abs(fft_v[1:])) + 1
+        cycle_v = np.clip(int(round(1 / freq_v[idx_v])), 20, 60)
 
-        # ===== 用預測 return 推進市場 =====
-        last_row = df_ext.iloc[-1]
-        last_close = float(last_row["Close"])
 
-        # 用第 1 天 normalized return
-        r_norm = float(pred_ret[0][0])
-        scale = float(last_row["RET_STD_20"])
-        scale = max(scale, 1e-6)
+    # =============================
+    # 4️⃣ 震盪幅度（ATR × RSI）
+    # =============================
+    atr = last_valid_value(df, "ATR_14", lookback=40)
+    if atr is None:
+        raise ValueError("❌ 無可用 ATR_14（最近 40 日皆為 NaN）")
+    atr_ratio = atr / last_close
 
-        r = r_norm * scale
-        next_close = last_close * np.exp(r)
+    rsi = last_valid_value(df, "RSI", lookback=40)
+    rsi_factor = np.clip(abs(rsi - 50) / 50, 0.3, 1.2)
 
-        next_date = df_ext.index[-1] + BDay(1)
-        dates.append(next_date)
+    base_amp = atr_ratio * rsi_factor
+    base_amp = np.clip(base_amp, 0.02, 0.18)
 
-        # ===== 建立新的 OHLC（簡化但一致）=====
-        new_row = last_row.copy()
-        new_row["Open"] = last_close
-        new_row["Close"] = next_close
-        new_row["High"] = max(last_close, next_close)
-        new_row["Low"]  = min(last_close, next_close)
+    # =============================
+    # 5️⃣ 合成價格（多週期）
+    # =============================
+    prices = [last_close]
 
-        new_row.name = next_date
-        df_ext = pd.concat([df_ext, new_row.to_frame().T])
+    for m in range(1, MONTHS + 1):
+        phase_p = 2 * np.pi * (m * DPM) / cycle_p
+        phase_v = 2 * np.pi * (m * DPM) / cycle_v
 
-        # ===== 🔑 重算特徵（非常重要）=====
-        df_ext = add_features(df_ext)
-        df_ext = df_ext.dropna()
+        cycle_main = base_amp * np.sin(phase_p)
+        cycle_pull = 0.6 * base_amp * np.sin(phase_v + np.pi)
 
-    # ===== 組 Trend DataFrame =====
-    trend_df = pd.DataFrame({
-        "date": dates,
-        "Trend_Index": trend_vals
-    })
+        price = trend[m - 1] * (1 + cycle_main + cycle_pull)
+        prices.append(price)
 
-    # ===== 轉成月頻 =====
-    trend_df["month"] = trend_df["date"].dt.to_period("M").dt.to_timestamp()
-    monthly = trend_df.groupby("month")["Trend_Index"].mean().reset_index()
+    prices = np.array(prices)
 
-    # ===== 存 CSV =====
-    os.makedirs("results", exist_ok=True)
-    out_csv = f"results/{datetime.now():%Y-%m-%d}_{ticker}_6m_trend_index.csv"
-    monthly.to_csv(out_csv, index=False, encoding="utf-8-sig")
+    # =============================
+    # 6️⃣ 區間帶（ATR-based fan）
+    # =============================
+    upper = prices * (1 + 1.2 * base_amp)
+    lower = prices * (1 - 1.2 * base_amp)
 
-    # ===== 畫圖 =====
-    plt.figure(figsize=(14, 6))
-    plt.plot(
-        monthly["month"].dt.strftime("%Y-%m"),
-        monthly["Trend_Index"],
-        marker="o",
-        linewidth=2
-    )
-    plt.axhline(0, color="gray", linestyle="--", alpha=0.6)
-    plt.title(f"{ticker} 6-Month Trend Index (Regime Forecast)")
-    plt.xlabel("Month")
-    plt.ylabel("Trend Index ( >0 Bullish , <0 Bearish )")
+    # =============================
+    # 7️⃣ X 軸（月）
+    # =============================
+    labels = ["Now"] + pd.date_range(
+        asof_date + pd.offsets.MonthBegin(1),
+        periods=MONTHS,
+        freq="MS"
+    ).strftime("%Y-%m").tolist()
+
+    # =============================
+    # 8️⃣ Plot
+    # =============================
+    plt.figure(figsize=(15, 7))
+    x = np.arange(MONTHS + 1)
+
+    plt.fill_between(x, lower, upper, alpha=0.18, label="Expected Range")
+    plt.plot(x, prices, "r-o", linewidth=2.8, label="Projected Path")
+    plt.scatter(0, prices[0], s=180, marker="*", label="Today")
+
+    for i, p in enumerate(prices[1:]):
+        plt.text(i + 1, p, f"{p:.2f}", ha="center", fontsize=12)
+
+    plt.xticks(x, labels, fontsize=13)
+    plt.title(f"{ticker} · 6M Outlook (Multi-Cycle + ATR + RSI)")
     plt.grid(alpha=0.3)
-    plt.xticks(rotation=45)
+    plt.legend()
 
-    out_png = f"results/{datetime.now():%Y-%m-%d}_{ticker}_6m_trend_index.png"
-    plt.savefig(out_png, dpi=300, bbox_inches="tight")
+    os.makedirs("results", exist_ok=True)
+    out = f"results/{datetime.now():%Y-%m-%d}_{ticker}_6m_advanced.png"
+    plt.savefig(out, dpi=300, bbox_inches="tight")
     plt.close()
 
-    print(f"📊 已輸出【真・6M 趨勢預測】：{out_png}")
+def last_valid_value(df: pd.DataFrame, col: str, lookback: int = 30):
+    """
+    取最近一筆有效（非 NaN）的指標值
+    - 用於非交易日 / 補 today row 的情況
+    """
+    if col not in df.columns:
+        return None
+
+    s = df[col].iloc[-lookback:]
+    s = s[s.notna()]
+    if s.empty:
+        return None
+    return float(s.iloc[-1])
+
+
 
 # ================= Main =================
 if __name__ == "__main__":
@@ -517,8 +594,11 @@ if __name__ == "__main__":
     FEATURES = [
         "Close", "Open", "High", "Low",
         "Volume", "RSI", "MACD", "K", "D", "ATR_14",
-        "HL_RANGE", "GAP", "VOL_REL"
+        "HL_RANGE", "GAP", "VOL_REL",
+        "TREND_60",          # 🔧 ADD
+        "TREND_SLOPE_20"     # 🔧 ADD
     ]
+
 
     missing = [c for c in FEATURES if c not in df.columns]
     if missing:
@@ -603,10 +683,25 @@ if __name__ == "__main__":
         scale_last = float(np.log(df["Close"].astype(float)).diff().rolling(20).std().iloc[-1])
     scale_last = max(scale_last, 1e-6)
 
+
+    # 🔧 ADD: Regime-based 波段放大 / 壓縮（用最近的 TREND_60）
+    trend60 = last_valid_value(df, "TREND_60", lookback=5)
+    
+    amp = 1.0
+    if trend60 is not None:
+        if trend60 > 1.0:
+            amp = 1.4      # 強趨勢 → 放大
+        elif trend60 < -1.0:
+            amp = 1.3      # 強空趨勢
+        elif abs(trend60) < 0.5:
+            amp = 0.6      # 盤整 → 壓縮
+    
+    print(f"📊 Regime amp = {amp:.2f}")
+
     prices = []
     price = last_close
     for r_norm in raw_norm_returns:
-        r = float(r_norm) * scale_last
+        r = float(r_norm) * scale_last * amp
         price *= np.exp(r)
         prices.append(price)
 
@@ -634,16 +729,12 @@ if __name__ == "__main__":
     # ✅ 圖輸出（內容不動、檔名改含 ticker）
     plot_and_save(df, future_df, ticker=TICKER)
     plot_backtest_error(df, ticker=TICKER)
-    # ===== 6 個月趨勢（只新增）=====
-    forecast_6m_trend_index(
-        model=model,
+    # ================= 6M Trend Forecast（x 軸 = 月） =================
+    plot_6m_trend_advanced(
         df=df,
-        features=FEATURES,
-        scaler=sx,
-        lookback=LOOKBACK,
-        steps=STEPS,
+        last_close=last_close,
+        raw_norm_returns=raw_norm_returns,
+        scale_last=scale_last,
         ticker=TICKER,
-        months=6
+        asof_date=asof_date
     )
-
-    
