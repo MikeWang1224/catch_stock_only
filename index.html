@@ -101,7 +101,7 @@
 <body>
 
 <h1>每日模型圖表</h1>
-<div class="hint">短線＝明日｜趨勢＝多日結構（顏色以短線為準）</div>
+<div class="hint">短線＝明日｜趨勢＝多日結構（六個月圖僅供方向參考）</div>
 
 <div id="container"></div>
 
@@ -111,8 +111,8 @@
 
   function mockModelOutput() {
     return {
-      dir1: 0.45 + Math.random() * 0.3,   // 明日
-      dirN: 0.45 + Math.random() * 0.3    // 趨勢
+      dir1: 0.45 + Math.random() * 0.3,
+      dirN: 0.45 + Math.random() * 0.3
     };
   }
 
@@ -137,20 +137,41 @@
   }
 
   async function findLatest(stock) {
-    for (let i=0;i<=MAX_LOOKBACK_DAYS;i++) {
+    for (let i = 0; i <= MAX_LOOKBACK_DAYS; i++) {
       const d = new Date();
-      d.setDate(d.getDate()-i);
+      d.setDate(d.getDate() - i);
       const ds = getTWDate(d);
       const pred = `${IMG_FOLDER}/${ds}_${stock.ticker}_pred.png`;
       const back = `${IMG_FOLDER}/${ds}_${stock.ticker}_backtest.png`;
       if (await loadImage(pred)) {
-        return { date: ds, offset:i, pred, back, backOK: await loadImage(back) };
+        return {
+          date: ds,
+          offset: i,
+          pred,
+          back,
+          backOK: await loadImage(back)
+        };
       }
     }
     return null;
   }
 
-  // ✅ 只改「說法」，不改門檻
+  // 🔹 只給 8110.TW 用的 6M 圖
+  async function findLatest6M(stock) {
+    if (stock.ticker !== "8110.TW") return null;
+
+    for (let i = 0; i <= MAX_LOOKBACK_DAYS; i++) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      const ds = getTWDate(d);
+      const img = `${IMG_FOLDER}/${ds}_${stock.ticker}_6m_advanced.png`;
+      if (await loadImage(img)) {
+        return { date: ds, img };
+      }
+    }
+    return null;
+  }
+
   function classify(p, mode) {
     if (p > 0.55) return ["up", mode==="short" ? "📈 偏多" : "📈 趨勢偏多"];
     if (p < 0.45) return ["down", mode==="short" ? "📉 偏空" : "📉 趨勢偏空"];
@@ -163,6 +184,8 @@
     for (const s of STOCKS) {
       const found = await findLatest(s);
       if (!found) continue;
+
+      const found6m = await findLatest6M(s);
 
       const m = mockModelOutput();
       const [c1, t1] = classify(m.dir1, "short");
@@ -197,6 +220,12 @@
           <div class="section-title big">昨日預測 → 今日實際</div>
           <img src="${found.back}">
         </div>` : ""}
+
+        ${found6m ? `
+        <div class="section">
+          <div class="section-title big">📈 六個月趨勢展望（中長期）</div>
+          <img src="${found6m.img}">
+        </div>` : ""}
       `;
 
       c.appendChild(block);
@@ -208,4 +237,3 @@
 
 </body>
 </html>
-<!-- BUILD_TIME Fri Dec 26 03:04:50 UTC 2025 -->
