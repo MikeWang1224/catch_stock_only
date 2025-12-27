@@ -130,8 +130,12 @@ def save_stock_recent_days(df, ticker):
                 "K": float(row["K"]),
                 "D": float(row["D"]),
                 "ATR_14": float(row["ATR_14"]),
+            },
+            "_meta": {
+                "updated_at": firestore.SERVER_TIMESTAMP
             }
         }, merge=True)
+
 
     batch.commit()
     print(f"🔥 {ticker} 寫入最近 {len(df_tail)} 天")
@@ -155,8 +159,14 @@ def save_factor_latest(tickers, alias):
                 print(f"ℹ️ 今日非交易日，{alias} 使用 {date_str}")
 
             db.collection(COLLECTION).document(date_str).set({
-                alias: {"Close": float(row["Close"])}
+                alias: {
+                    "Close": float(row["Close"])
+                },
+                "_meta": {
+                    "updated_at": firestore.SERVER_TIMESTAMP
+                }
             }, merge=True)
+
 
             print(f"🔥 {alias} 更新成功（來源 {tk}）")
             return
