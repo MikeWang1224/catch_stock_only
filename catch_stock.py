@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 個股資料抓取 + 技術指標計算 + Firestore 更新與寫回
-✅ 今日 Close 先覆寫，再重新計算指標（一致性修正版） 
-✅ 改1：個股只寫最近 N 天（預設 3 天）
-✅ 改2：指數 / 外生因子只寫最新一天
-✅ 改3：自動判斷是否為交易日，非交易日改用最近交易日
+✅ 今日 Close 先覆寫，再重新計算指標（一致性修正版）
+✅ 個股只寫最近 N 天
+✅ 指數 / 外生因子只寫最近交易日
+✅ 非交易日自動 fallback 到最近交易日
 不含模型、不含預測、不含繪圖
 """
 
@@ -36,17 +36,19 @@ if key_dict:
 else:
     print("⚠️ FIREBASE 未設定，Firestore 寫入將略過")
 
-# ================= 交易日工具 =================
-def get_last_trading_day(df: pd.DataFrame):
+# ================= 交易日解析（唯一真相） =================
+def resolve_effective_trade_day(df: pd.DataFrame):
     """
-    回傳 (last_trading_day: Timestamp, is_today_trading: bool)
+    回傳:
+    - trade_day: Timestamp（實際交易日，永遠來自市場資料）
+    - is_today_trading: bool（今天是否真的有交易）
     """
     if df is None or len(df) == 0:
         return None, False
 
-    last_day = df.index[-1].normalize()
+    trade_day = df.index[-1].normalize()
     today = pd.Timestamp(datetime.now().date())
-    return last_day, last_day == today
+    return trade_day, trade_day == today
 
 # ================= 技術指標 =================
 def add_all_indicators(df: pd.DataFrame) -> pd.DataFrame:
@@ -88,18 +90,18 @@ def overwrite_last_close(df, ticker):
     if db is None or df is None or len(df) == 0:
         return df
 
-    last_day, is_today_trading = get_last_trading_day(df)
-    date_str = last_day.strftime("%Y-%m-%d")
+    trade_day, is_today_trading = resolve_effective_trade_day(df)
+    date_str = trade_day.strftime("%Y-%m-%d")
 
     if not is_today_trading:
-        print(f"ℹ️ 今日非交易日，{ticker} 改用最近交易日 {date_str}")
+        print(f"ℹ️ 今日非交易日，{ticker} 使用最近交易日 {date_str}")
 
     doc = db.collection(COLLECTION).document(date_str).get()
     if doc.exists:
         payload = doc.to_dict().get(ticker, {})
         if "Close" in payload:
-            df.loc[last_day, "Close"] = float(payload["Close"])
-            print(f"✔ 覆寫 {ticker} Close ({date_str}): {payload['Close']}")
+            df.loc[trade_day, "Close"] = float(payload["Close"])
+            print(f"✔ 覆寫 {ticker} Close ({date_str})")
 
     return df
 
@@ -110,7 +112,7 @@ def fetch_prepare_recalc(ticker):
     return add_all_indicators(df)
 
 def save_stock_recent_days(df, ticker):
-    if db is None:
+    if db is None or df is None or len(df) == 0:
         return
 
     df_tail = df.tail(WRITE_DAYS)
@@ -136,7 +138,6 @@ def save_stock_recent_days(df, ticker):
             }
         }, merge=True)
 
-
     batch.commit()
     print(f"🔥 {ticker} 寫入最近 {len(df_tail)} 天")
 
@@ -151,9 +152,9 @@ def save_factor_latest(tickers, alias):
             if len(df) == 0:
                 continue
 
-            last_day, is_today_trading = get_last_trading_day(df)
-            row = df.loc[last_day]
-            date_str = last_day.strftime("%Y-%m-%d")
+            trade_day, is_today_trading = resolve_effective_trade_day(df)
+            row = df.loc[trade_day]
+            date_str = trade_day.strftime("%Y-%m-%d")
 
             if not is_today_trading:
                 print(f"ℹ️ 今日非交易日，{alias} 使用 {date_str}")
@@ -166,7 +167,6 @@ def save_factor_latest(tickers, alias):
                     "updated_at": firestore.SERVER_TIMESTAMP
                 }
             }, merge=True)
-
 
             print(f"🔥 {alias} 更新成功（來源 {tk}）")
             return
