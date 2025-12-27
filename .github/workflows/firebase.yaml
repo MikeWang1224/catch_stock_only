@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4_stock
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,11 +32,9 @@ jobs:
             firebase-admin==6.5.0 \
             google-cloud-firestore==2.17.0 \
             yfinance \
-            matplotlib \
             pandas \
-            numpy \
-            scikit-learn \
-            tensorflow
+            numpy
+
 
       # ---------------- 先抓股價 + 技術指標 ----------------
       - name: Run stock data collection (catch_stock.py)
@@ -45,43 +43,43 @@ jobs:
         run: |
           python catch_stock.py
 
-      # ---------------- 再跑 LSTM / 預測 / 繪圖：光寶 ----------------
-      - name: Run stock prediction program (Liteon - 2301stock.py)
-        env:
-          FIREBASE: ${{ secrets.FIREBASE }}
-        run: |
-          python 2301stock.py
+      # # ---------------- 再跑 LSTM / 預測 / 繪圖：光寶 ----------------
+      # - name: Run stock prediction program (Liteon - 2301stock.py)
+      #   env:
+      #     FIREBASE: ${{ secrets.FIREBASE }}
+      #   run: |
+      #     python 2301stock.py
 
-      # ---------------- 再跑 LSTM / 預測 / 繪圖：南亞科 ----------------
-      - name: Run stock prediction program (Nanya - 2408stock.py)
-        env:
-          FIREBASE: ${{ secrets.FIREBASE }}
-        run: |
-          python 2408stock.py
+      # # ---------------- 再跑 LSTM / 預測 / 繪圖：南亞科 ----------------
+      # - name: Run stock prediction program (Nanya - 2408stock.py)
+      #   env:
+      #     FIREBASE: ${{ secrets.FIREBASE }}
+      #   run: |
+      #     python 2408stock.py
 
-      # ---------------- 再跑 LSTM / 預測 / 繪圖：華東 ----------------
-      - name: Run stock prediction program (Huatung - 8110stock.py)
-        env:
-          FIREBASE: ${{ secrets.FIREBASE }}
-        run: |
-          python 8110stock.py
+      # # ---------------- 再跑 LSTM / 預測 / 繪圖：華東 ----------------
+      # - name: Run stock prediction program (Huatung - 8110stock.py)
+      #   env:
+      #     FIREBASE: ${{ secrets.FIREBASE }}
+      #   run: |
+      #     python 8110stock.py
 
-      # ---------------- 讓 HTML 一定更新（關鍵） ----------------
-      - name: Update build time in index.html
-        run: |
-          if grep -q "BUILD_TIME" index.html; then
-            sed -i "s|<!-- BUILD_TIME.*-->|<!-- BUILD_TIME $(date) -->|" index.html
-          else
-            echo "<!-- BUILD_TIME $(date) -->" >> index.html
-          fi
+      # # ---------------- 讓 HTML 一定更新（關鍵） ----------------
+      # - name: Update build time in index.html
+      #   run: |
+      #     if grep -q "BUILD_TIME" index.html; then
+      #       sed -i "s|<!-- BUILD_TIME.*-->|<!-- BUILD_TIME $(date) -->|" index.html
+      #     else
+      #       echo "<!-- BUILD_TIME $(date) -->" >> index.html
+      #     fi
 
-      # ---------------- Commit 圖表 + HTML ----------------
-      - name: Commit & push results and html
-        run: |
-          git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          git config --global user.name "github-actions[bot]"
-          git add results/*.png
-          git add results/*.csv
-          git add index.html
-          git commit -m "Update stock charts and refresh HTML" || echo "No changes to commit"
-          git push
+      # # ---------------- Commit 圖表 + HTML ----------------
+      # - name: Commit & push results and html
+      #   run: |
+      #     git config --global user.email "github-actions[bot]@users.noreply.github.com"
+      #     git config --global user.name "github-actions[bot]"
+      #     git add results/*.png
+      #     git add results/*.csv
+      #     git add index.html
+      #     git commit -m "Update stock charts and refresh HTML" || echo "No changes to commit"
+      #     git push
